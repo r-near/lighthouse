@@ -5,6 +5,7 @@ use crate::{
     Error as ServerError, CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER,
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER,
 };
+use attestation::SingleAttestation;
 use lighthouse_network::{ConnectionDirection, Enr, Multiaddr, PeerConnectionStatus};
 use mediatype::{names, MediaType, MediaTypeList};
 use reqwest::header::HeaderMap;
@@ -1110,6 +1111,7 @@ impl ForkVersionDeserialize for SseExtendedPayloadAttributes {
 #[serde(bound = "E: EthSpec", untagged)]
 pub enum EventKind<E: EthSpec> {
     Attestation(Box<Attestation<E>>),
+    SingleAttestation(Box<SingleAttestation>),
     Block(SseBlock),
     BlobSidecar(SseBlobSidecar),
     FinalizedCheckpoint(SseFinalizedCheckpoint),
@@ -1136,6 +1138,7 @@ impl<E: EthSpec> EventKind<E> {
             EventKind::Block(_) => "block",
             EventKind::BlobSidecar(_) => "blob_sidecar",
             EventKind::Attestation(_) => "attestation",
+            EventKind::SingleAttestation(_) => "single_attestation",
             EventKind::VoluntaryExit(_) => "voluntary_exit",
             EventKind::FinalizedCheckpoint(_) => "finalized_checkpoint",
             EventKind::ChainReorg(_) => "chain_reorg",

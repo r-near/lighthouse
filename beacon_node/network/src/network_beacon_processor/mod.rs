@@ -1,6 +1,7 @@
 use crate::sync::manager::BlockProcessType;
 use crate::sync::SamplingId;
 use crate::{service::NetworkMessage, sync::manager::SyncMessage};
+use attestation::SingleAttestation;
 use beacon_chain::blob_verification::{GossipBlobError, GossipVerifiedBlob};
 use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::data_column_verification::{observe_gossip_data_column, GossipDataColumnError};
@@ -28,7 +29,7 @@ use lighthouse_network::{
     Client, MessageId, NetworkGlobals, PeerId, PubsubMessage,
 };
 use rand::prelude::SliceRandom;
-use slog::{debug, error, trace, warn, Logger};
+use slog::{debug, error, info, trace, warn, Logger};
 use slot_clock::ManualSlotClock;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,6 +83,49 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         self.beacon_processor_send
             .try_send(event)
             .map_err(Into::into)
+    }
+
+    /// Create a new `Work` event for some `SingleAttestation`.
+    pub fn send_single_attestation(
+        self: &Arc<Self>,
+        message_id: MessageId,
+        peer_id: PeerId,
+        single_attestation: SingleAttestation,
+        subnet_id: SubnetId,
+        should_import: bool,
+        seen_timestamp: Duration,
+    ) -> Result<(), Error<T::EthSpec>> {
+        info!(self.log, "SENDING A SINGLE ATTESTATION");
+        let result = self.chain.with_committee_cache(
+            single_attestation.data.target.root,
+            single_attestation
+                .data
+                .slot
+                .epoch(T::EthSpec::slots_per_epoch()),
+            |committee_cache, _| {
+                let committees =
+                    committee_cache.get_beacon_committees_at_slot(single_attestation.data.slot)?;
+
+                let attestation = single_attestation.to_attestation(&committees)?;
+
+                Ok(self.send_unaggregated_attestation(
+                    message_id.clone(),
+                    peer_id,
+                    attestation,
+                    subnet_id,
+                    should_import,
+                    seen_timestamp,
+                ))
+            },
+        );
+
+        match result {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(self.log, "Failed to send SingleAttestation"; "error" => ?e);
+                Ok(())
+            }
+        }
     }
 
     /// Create a new `Work` event for some unaggregated attestation.

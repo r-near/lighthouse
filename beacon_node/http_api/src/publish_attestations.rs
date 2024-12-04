@@ -50,7 +50,7 @@ use tokio::sync::{
     mpsc::{Sender, UnboundedSender},
     oneshot,
 };
-use types::Attestation;
+use types::{attestation::SingleAttestation, Attestation, EthSpec};
 
 // Error variants are only used in `Debug` and considered `dead_code` by the compiler.
 #[derive(Debug)]
@@ -82,15 +82,43 @@ fn verify_and_publish_attestation<T: BeaconChainTypes>(
         .verify_unaggregated_attestation_for_gossip(attestation, None)
         .map_err(Error::Validation)?;
 
-    // Publish.
-    network_tx
-        .send(NetworkMessage::Publish {
-            messages: vec![PubsubMessage::Attestation(Box::new((
-                attestation.subnet_id(),
-                attestation.attestation().clone_as_attestation(),
-            )))],
-        })
-        .map_err(|_| Error::Publication)?;
+    match attestation.attestation() {
+        types::AttestationRef::Base(_) => {
+            // Publish.
+            network_tx
+                .send(NetworkMessage::Publish {
+                    messages: vec![PubsubMessage::Attestation(Box::new((
+                        attestation.subnet_id(),
+                        attestation.attestation().clone_as_attestation(),
+                    )))],
+                })
+                .map_err(|_| Error::Publication)?;
+        }
+        types::AttestationRef::Electra(attn) => {
+            chain
+                .with_committee_cache(
+                    attn.data.target.root,
+                    attn.data.slot.epoch(T::EthSpec::slots_per_epoch()),
+                    |committee_cache, _| {
+                        let committees =
+                            committee_cache.get_beacon_committees_at_slot(attn.data.slot)?;
+
+                        let single_attestation = attn.to_single_attestation(&committees)?;
+
+                        network_tx
+                            .send(NetworkMessage::Publish {
+                                messages: vec![PubsubMessage::SingleAttestation(Box::new((
+                                    attestation.subnet_id(),
+                                    single_attestation,
+                                )))],
+                            })
+                            .map_err(|_| BeaconChainError::UnableToPublish)?;
+                        Ok(())
+                    },
+                )
+                .map_err(|_| Error::Publication)?;
+        }
+    }
 
     // Notify the validator monitor.
     chain
@@ -127,6 +155,48 @@ fn verify_and_publish_attestation<T: BeaconChainTypes>(
     } else {
         Ok(())
     }
+}
+
+pub async fn publish_single_attestations<T: BeaconChainTypes>(
+    task_spawner: TaskSpawner<T::EthSpec>,
+    chain: Arc<BeaconChain<T>>,
+    single_attestations: Vec<SingleAttestation>,
+    network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
+    reprocess_send: Option<Sender<ReprocessQueueMessage>>,
+    log: Logger,
+) -> Result<(), warp::Rejection> {
+    let mut attestations = vec![];
+    for single_attestation in single_attestations {
+        let attestation = chain.with_committee_cache(
+            single_attestation.data.target.root,
+            single_attestation
+                .data
+                .slot
+                .epoch(T::EthSpec::slots_per_epoch()),
+            |committee_cache, _| {
+                let committees =
+                    committee_cache.get_beacon_committees_at_slot(single_attestation.data.slot)?;
+
+                let attestation = single_attestation.to_attestation::<T::EthSpec>(&committees)?;
+
+                Ok(attestation)
+            },
+        );
+
+        if let Ok(attestation) = attestation {
+            attestations.push(attestation);
+        }
+    }
+
+    publish_attestations(
+        task_spawner,
+        chain,
+        attestations,
+        network_tx,
+        reprocess_send,
+        log,
+    )
+    .await
 }
 
 pub async fn publish_attestations<T: BeaconChainTypes>(

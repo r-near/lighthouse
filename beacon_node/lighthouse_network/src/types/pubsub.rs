@@ -6,6 +6,7 @@ use snap::raw::{decompress_len, Decoder, Encoder};
 use ssz::{Decode, Encode};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
+use types::attestation::SingleAttestation;
 use types::{
     Attestation, AttestationBase, AttestationElectra, AttesterSlashing, AttesterSlashingBase,
     AttesterSlashingElectra, BlobSidecar, DataColumnSidecar, DataColumnSubnetId, EthSpec,
@@ -29,6 +30,8 @@ pub enum PubsubMessage<E: EthSpec> {
     AggregateAndProofAttestation(Box<SignedAggregateAndProof<E>>),
     /// Gossipsub message providing notification of a raw un-aggregated attestation with its shard id.
     Attestation(Box<(SubnetId, Attestation<E>)>),
+    /// Gossipsub message providing notification of a `SingleAttestation`` with its shard id.
+    SingleAttestation(Box<(SubnetId, SingleAttestation)>),
     /// Gossipsub message providing notification of a voluntary exit.
     VoluntaryExit(Box<SignedVoluntaryExit>),
     /// Gossipsub message providing notification of a new proposer slashing.
@@ -126,6 +129,9 @@ impl<E: EthSpec> PubsubMessage<E> {
             }
             PubsubMessage::AggregateAndProofAttestation(_) => GossipKind::BeaconAggregateAndProof,
             PubsubMessage::Attestation(attestation_data) => {
+                GossipKind::Attestation(attestation_data.0)
+            }
+            PubsubMessage::SingleAttestation(attestation_data) => {
                 GossipKind::Attestation(attestation_data.0)
             }
             PubsubMessage::VoluntaryExit(_) => GossipKind::VoluntaryExit,
@@ -411,6 +417,7 @@ impl<E: EthSpec> PubsubMessage<E> {
             PubsubMessage::ProposerSlashing(data) => data.as_ssz_bytes(),
             PubsubMessage::AttesterSlashing(data) => data.as_ssz_bytes(),
             PubsubMessage::Attestation(data) => data.1.as_ssz_bytes(),
+            PubsubMessage::SingleAttestation(data) => data.1.as_ssz_bytes(),
             PubsubMessage::SignedContributionAndProof(data) => data.as_ssz_bytes(),
             PubsubMessage::SyncCommitteeMessage(data) => data.1.as_ssz_bytes(),
             PubsubMessage::BlsToExecutionChange(data) => data.as_ssz_bytes(),
@@ -454,6 +461,14 @@ impl<E: EthSpec> std::fmt::Display for PubsubMessage<E> {
                 *data.0,
                 data.1.data().slot,
                 data.1.committee_index(),
+            ),
+            PubsubMessage::SingleAttestation(data) => write!(
+                f,
+                "SingleAttestation: subnet_id: {}, attestation_slot: {}, committee_index: {:?}, attester_index: {:?}",
+                *data.0,
+                data.1.data.slot,
+                data.1.committee_index,
+                data.1.attester_index,
             ),
             PubsubMessage::VoluntaryExit(_data) => write!(f, "Voluntary Exit"),
             PubsubMessage::ProposerSlashing(_data) => write!(f, "Proposer Slashing"),
