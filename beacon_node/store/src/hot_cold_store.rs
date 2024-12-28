@@ -2538,6 +2538,18 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         self.hot_db.get(state_root)
     }
 
+    /// Load all hot state summaries present in the hot DB
+    pub fn load_hot_state_summaries(&self) -> Result<Vec<(Hash256, HotStateSummary)>, Error> {
+        self.hot_db
+            .iter_column::<Hash256>(DBColumn::BeaconStateSummary)
+            .map(|res| {
+                let (state_root, value) = res?;
+                let summary = HotStateSummary::from_ssz_bytes(&value)?;
+                Ok((state_root, summary))
+            })
+            .collect()
+    }
+
     /// Load the temporary flag for a state root, if one exists.
     ///
     /// Returns `Some` if the state is temporary, or `None` if the state is permanent or does not
@@ -3100,10 +3112,7 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         return Err(HotColdDBError::FreezeSlotUnaligned(finalized_state.slot()).into());
     }
 
-    let mut hot_db_ops = vec![];
     let mut cold_db_block_ops = vec![];
-    let mut epoch_boundary_blocks = HashSet::new();
-    let mut non_checkpoint_block_roots = HashSet::new();
 
     // Iterate in descending order until the current split slot
     let state_roots = RootsIterator::new(&store, finalized_state)
@@ -3115,39 +3124,12 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
 
     // Then, iterate states in slot ascending order, as they are stored wrt previous states.
     for (block_root, state_root, slot) in state_roots.into_iter().rev() {
-        // Delete the execution payload if payload pruning is enabled. At a skipped slot we may
-        // delete the payload for the finalized block itself, but that's OK as we only guarantee
-        // that payloads are present for slots >= the split slot. The payload fetching code is also
-        // forgiving of missing payloads.
-        if store.config.prune_payloads {
-            hot_db_ops.push(StoreOp::DeleteExecutionPayload(block_root));
-        }
-
         // Store the slot to block root mapping.
         cold_db_block_ops.push(KeyValueStoreOp::PutKeyValue(
             DBColumn::BeaconBlockRoots,
             slot.as_u64().to_be_bytes().to_vec(),
             block_root.as_slice().to_vec(),
         ));
-
-        // At a missed slot, `state_root_iter` will return the block root
-        // from the previous non-missed slot. This ensures that the block root at an
-        // epoch boundary is always a checkpoint block root. We keep track of block roots
-        // at epoch boundaries by storing them in the `epoch_boundary_blocks` hash set.
-        // We then ensure that block roots at the epoch boundary aren't included in the
-        // `non_checkpoint_block_roots` hash set.
-        if slot % E::slots_per_epoch() == 0 {
-            epoch_boundary_blocks.insert(block_root);
-        } else {
-            non_checkpoint_block_roots.insert(block_root);
-        }
-
-        if epoch_boundary_blocks.contains(&block_root) {
-            non_checkpoint_block_roots.remove(&block_root);
-        }
-
-        // Delete the old summary, and the full state if we lie on an epoch boundary.
-        hot_db_ops.push(StoreOp::DeleteState(state_root, Some(slot)));
 
         // Do not try to store states if a restore point is yet to be stored, or will never be
         // stored (see `STATE_UPPER_LIMIT_NO_RETAIN`). Make an exception for the genesis state
@@ -3180,19 +3162,6 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         // states before storing new ones.
         store.cold_db.do_atomically(cold_db_ops)?;
     }
-
-    // Prune sync committee branch data for all non checkpoint block roots.
-    // Note that `non_checkpoint_block_roots` should only contain non checkpoint block roots
-    // as long as `finalized_state.slot()` is at an epoch boundary. If this were not the case
-    // we risk the chance of pruning a `sync_committee_branch` for a checkpoint block root.
-    // E.g. if `current_split_slot` = (Epoch A slot 0) and `finalized_state.slot()` = (Epoch C slot 31)
-    // and (Epoch D slot 0) is a skipped slot, we will have pruned a `sync_committee_branch`
-    // for a checkpoint block root.
-    non_checkpoint_block_roots
-        .into_iter()
-        .for_each(|block_root| {
-            hot_db_ops.push(StoreOp::DeleteSyncCommitteeBranch(block_root));
-        });
 
     // Warning: Critical section.  We have to take care not to put any of the two databases in an
     //          inconsistent state if the OS process dies at any point during the freezing
@@ -3240,9 +3209,6 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         // the in-memory split point now.
         *split_guard = split;
     }
-
-    // Delete the blocks and states from the hot database if we got this far.
-    store.do_atomically_with_block_and_blobs_cache(hot_db_ops)?;
 
     // Update the cache's view of the finalized state.
     store.update_finalized_state(
