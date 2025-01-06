@@ -13,10 +13,9 @@ use slog::{debug, Logger};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use types::blob_sidecar::BlobIdentifier;
-use types::runtime_var_list::RuntimeFixedList;
 use types::{
     BlobSidecar, ChainSpec, ColumnIndex, DataColumnIdentifier, DataColumnSidecar, Epoch, EthSpec,
-    Hash256, RuntimeVariableList, SignedBeaconBlock,
+    Hash256, RuntimeFixedVector, RuntimeVariableList, SignedBeaconBlock,
 };
 
 /// This represents the components of a partially available block
@@ -28,7 +27,7 @@ use types::{
 #[derive(Clone)]
 pub struct PendingComponents<E: EthSpec> {
     pub block_root: Hash256,
-    pub verified_blobs: RuntimeFixedList<Option<KzgVerifiedBlob<E>>>,
+    pub verified_blobs: RuntimeFixedVector<Option<KzgVerifiedBlob<E>>>,
     pub verified_data_columns: Vec<KzgVerifiedCustodyDataColumn<E>>,
     pub executed_block: Option<DietAvailabilityPendingExecutedBlock<E>>,
     pub reconstruction_started: bool,
@@ -41,7 +40,7 @@ impl<E: EthSpec> PendingComponents<E> {
     }
 
     /// Returns an immutable reference to the fixed vector of cached blobs.
-    pub fn get_cached_blobs(&self) -> &RuntimeFixedList<Option<KzgVerifiedBlob<E>>> {
+    pub fn get_cached_blobs(&self) -> &RuntimeFixedVector<Option<KzgVerifiedBlob<E>>> {
         &self.verified_blobs
     }
 
@@ -62,7 +61,7 @@ impl<E: EthSpec> PendingComponents<E> {
     }
 
     /// Returns a mutable reference to the fixed vector of cached blobs.
-    pub fn get_cached_blobs_mut(&mut self) -> &mut RuntimeFixedList<Option<KzgVerifiedBlob<E>>> {
+    pub fn get_cached_blobs_mut(&mut self) -> &mut RuntimeFixedVector<Option<KzgVerifiedBlob<E>>> {
         &mut self.verified_blobs
     }
 
@@ -134,7 +133,7 @@ impl<E: EthSpec> PendingComponents<E> {
     /// Blobs are only inserted if:
     /// 1. The blob entry at the index is empty and no block exists.
     /// 2. The block exists and its commitment matches the blob's commitment.
-    pub fn merge_blobs(&mut self, blobs: RuntimeFixedList<Option<KzgVerifiedBlob<E>>>) {
+    pub fn merge_blobs(&mut self, blobs: RuntimeFixedVector<Option<KzgVerifiedBlob<E>>>) {
         for (index, blob) in blobs.iter().cloned().enumerate() {
             let Some(blob) = blob else { continue };
             self.merge_single_blob(index, blob);
@@ -236,8 +235,7 @@ impl<E: EthSpec> PendingComponents<E> {
     pub fn empty(block_root: Hash256, max_len: usize) -> Self {
         Self {
             block_root,
-            // TODO(pawan): just make this a vec potentially
-            verified_blobs: RuntimeFixedList::new(vec![None; max_len]),
+            verified_blobs: RuntimeFixedVector::new(vec![None; max_len]),
             verified_data_columns: vec![],
             executed_block: None,
             reconstruction_started: false,
@@ -466,7 +464,7 @@ impl<T: BeaconChainTypes> DataAvailabilityCheckerInner<T> {
         };
 
         let mut fixed_blobs =
-            RuntimeFixedList::new(vec![None; self.spec.max_blobs_per_block(epoch) as usize]);
+            RuntimeFixedVector::new(vec![None; self.spec.max_blobs_per_block(epoch) as usize]);
 
         for blob in kzg_verified_blobs {
             if let Some(blob_opt) = fixed_blobs.get_mut(blob.blob_index() as usize) {
@@ -1169,8 +1167,8 @@ mod pending_components_tests {
 
     type Setup<E> = (
         SignedBeaconBlock<E>,
-        RuntimeFixedList<Option<Arc<BlobSidecar<E>>>>,
-        RuntimeFixedList<Option<Arc<BlobSidecar<E>>>>,
+        RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>>,
+        RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>>,
         usize,
     );
 
@@ -1180,8 +1178,8 @@ mod pending_components_tests {
         let (block, blobs_vec) =
             generate_rand_block_and_blobs::<E>(ForkName::Deneb, NumBlobs::Random, &mut rng, &spec);
         let max_len = spec.max_blobs_per_block(block.epoch()) as usize;
-        let mut blobs: RuntimeFixedList<Option<Arc<BlobSidecar<E>>>> =
-            RuntimeFixedList::default(max_len);
+        let mut blobs: RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>> =
+            RuntimeFixedVector::default(max_len);
 
         for blob in blobs_vec {
             if let Some(b) = blobs.get_mut(blob.index as usize) {
@@ -1189,8 +1187,8 @@ mod pending_components_tests {
             }
         }
 
-        let mut invalid_blobs: RuntimeFixedList<Option<Arc<BlobSidecar<E>>>> =
-            RuntimeFixedList::default(max_len);
+        let mut invalid_blobs: RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>> =
+            RuntimeFixedVector::default(max_len);
         for (index, blob) in blobs.iter().enumerate() {
             if let Some(invalid_blob) = blob {
                 let mut blob_copy = invalid_blob.as_ref().clone();
@@ -1204,16 +1202,16 @@ mod pending_components_tests {
 
     type PendingComponentsSetup<E> = (
         DietAvailabilityPendingExecutedBlock<E>,
-        RuntimeFixedList<Option<KzgVerifiedBlob<E>>>,
-        RuntimeFixedList<Option<KzgVerifiedBlob<E>>>,
+        RuntimeFixedVector<Option<KzgVerifiedBlob<E>>>,
+        RuntimeFixedVector<Option<KzgVerifiedBlob<E>>>,
     );
 
     pub fn setup_pending_components(
         block: SignedBeaconBlock<E>,
-        valid_blobs: RuntimeFixedList<Option<Arc<BlobSidecar<E>>>>,
-        invalid_blobs: RuntimeFixedList<Option<Arc<BlobSidecar<E>>>>,
+        valid_blobs: RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>>,
+        invalid_blobs: RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>>,
     ) -> PendingComponentsSetup<E> {
-        let blobs = RuntimeFixedList::new(
+        let blobs = RuntimeFixedVector::new(
             valid_blobs
                 .iter()
                 .map(|blob_opt| {
@@ -1223,7 +1221,7 @@ mod pending_components_tests {
                 })
                 .collect::<Vec<_>>(),
         );
-        let invalid_blobs = RuntimeFixedList::new(
+        let invalid_blobs = RuntimeFixedVector::new(
             invalid_blobs
                 .iter()
                 .map(|blob_opt| {

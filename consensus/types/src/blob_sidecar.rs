@@ -1,11 +1,8 @@
 use crate::test_utils::TestRandom;
 use crate::{
     beacon_block_body::BLOB_KZG_COMMITMENTS_INDEX, BeaconBlockHeader, BeaconStateError, Blob,
-    Epoch, EthSpec, FixedVector, Hash256, SignedBeaconBlockHeader, Slot, VariableList,
-};
-use crate::{
-    runtime_var_list::RuntimeFixedList, ForkVersionDeserialize, KzgProofs, RuntimeVariableList,
-    SignedBeaconBlock,
+    Epoch, EthSpec, FixedVector, ForkVersionDeserialize, Hash256, KzgProofs, RuntimeFixedVector,
+    RuntimeVariableList, SignedBeaconBlock, SignedBeaconBlockHeader, Slot, VariableList,
 };
 use crate::{ChainSpec, ForkName};
 use bls::Signature;
@@ -297,7 +294,7 @@ impl<E: EthSpec> BlobSidecar<E> {
 
 pub type BlobSidecarList<E> = RuntimeVariableList<Arc<BlobSidecar<E>>>;
 /// Alias for a non length-constrained list of `BlobSidecar`s.
-pub type FixedBlobSidecarList<E> = RuntimeFixedList<Option<Arc<BlobSidecar<E>>>>;
+pub type FixedBlobSidecarList<E> = RuntimeFixedVector<Option<Arc<BlobSidecar<E>>>>;
 pub type BlobsList<E> = VariableList<Blob<E>, <E as EthSpec>::MaxBlobCommitmentsPerBlock>;
 
 impl<E: EthSpec> ForkVersionDeserialize for BlobSidecarList<E> {
