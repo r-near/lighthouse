@@ -118,6 +118,10 @@ impl<T> RuntimeVariableList<T> {
         }
     }
 
+    pub fn set_max_len(&mut self, max_len: usize) {
+        self.max_len = Some(max_len);
+    }
+
     /// Returns the number of values presently in `self`.
     pub fn len(&self) -> usize {
         self.vec.len()
