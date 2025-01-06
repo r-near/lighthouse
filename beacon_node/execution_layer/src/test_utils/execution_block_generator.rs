@@ -672,7 +672,7 @@ impl<E: EthSpec> ExecutionBlockGenerator<E> {
             // get random number between 0 and Max Blobs
             let mut rng = self.rng.lock();
             // TODO(pawan): thread the chainspec value here somehow
-            let num_blobs = rng.gen::<usize>() % 6;
+            let num_blobs = rng.gen::<usize>() % (6 + 1);
             let (bundle, transactions) = generate_blobs(num_blobs)?;
             for tx in Vec::from(transactions) {
                 execution_payload
