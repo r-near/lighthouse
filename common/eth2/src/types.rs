@@ -5,7 +5,6 @@ use crate::{
     Error as ServerError, CONSENSUS_BLOCK_VALUE_HEADER, CONSENSUS_VERSION_HEADER,
     EXECUTION_PAYLOAD_BLINDED_HEADER, EXECUTION_PAYLOAD_VALUE_HEADER,
 };
-use attestation::SingleAttestation;
 use lighthouse_network::{ConnectionDirection, Enr, Multiaddr, PeerConnectionStatus};
 use mediatype::{names, MediaType, MediaTypeList};
 use reqwest::header::HeaderMap;
@@ -1161,6 +1160,11 @@ impl<E: EthSpec> EventKind<E> {
             "attestation" => Ok(EventKind::Attestation(serde_json::from_str(data).map_err(
                 |e| ServerError::InvalidServerSentEvent(format!("Attestation: {:?}", e)),
             )?)),
+            "single_attestation" => Ok(EventKind::SingleAttestation(
+                serde_json::from_str(data).map_err(|e| {
+                    ServerError::InvalidServerSentEvent(format!("SingleAttestation: {:?}", e))
+                })?,
+            )),
             "block" => Ok(EventKind::Block(serde_json::from_str(data).map_err(
                 |e| ServerError::InvalidServerSentEvent(format!("Block: {:?}", e)),
             )?)),

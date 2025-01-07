@@ -6,16 +6,15 @@ use snap::raw::{decompress_len, Decoder, Encoder};
 use ssz::{Decode, Encode};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use types::attestation::SingleAttestation;
 use types::{
-    Attestation, AttestationBase, AttestationElectra, AttesterSlashing, AttesterSlashingBase,
-    AttesterSlashingElectra, BlobSidecar, DataColumnSidecar, DataColumnSubnetId, EthSpec,
-    ForkContext, ForkName, LightClientFinalityUpdate, LightClientOptimisticUpdate,
-    ProposerSlashing, SignedAggregateAndProof, SignedAggregateAndProofBase,
-    SignedAggregateAndProofElectra, SignedBeaconBlock, SignedBeaconBlockAltair,
-    SignedBeaconBlockBase, SignedBeaconBlockBellatrix, SignedBeaconBlockCapella,
-    SignedBeaconBlockDeneb, SignedBeaconBlockElectra, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedVoluntaryExit, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    Attestation, AttestationBase, AttesterSlashing, AttesterSlashingBase, AttesterSlashingElectra,
+    BlobSidecar, DataColumnSidecar, DataColumnSubnetId, EthSpec, ForkContext, ForkName,
+    LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
+    SignedAggregateAndProof, SignedAggregateAndProofBase, SignedAggregateAndProofElectra,
+    SignedBeaconBlock, SignedBeaconBlockAltair, SignedBeaconBlockBase, SignedBeaconBlockBellatrix,
+    SignedBeaconBlockCapella, SignedBeaconBlockDeneb, SignedBeaconBlockElectra,
+    SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit, SingleAttestation,
+    SubnetId, SyncCommitteeMessage, SyncSubnetId,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,32 +193,32 @@ impl<E: EthSpec> PubsubMessage<E> {
                         )))
                     }
                     GossipKind::Attestation(subnet_id) => {
-                        let attestation =
-                            match fork_context.from_context_bytes(gossip_topic.fork_digest) {
-                                Some(&fork_name) => {
-                                    if fork_name.electra_enabled() {
-                                        Attestation::Electra(
-                                            AttestationElectra::from_ssz_bytes(data)
-                                                .map_err(|e| format!("{:?}", e))?,
-                                        )
-                                    } else {
-                                        Attestation::Base(
-                                            AttestationBase::from_ssz_bytes(data)
-                                                .map_err(|e| format!("{:?}", e))?,
-                                        )
-                                    }
+                        match fork_context.from_context_bytes(gossip_topic.fork_digest) {
+                            Some(&fork_name) => {
+                                if fork_name.electra_enabled() {
+                                    let single_attestation =
+                                        SingleAttestation::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?;
+                                    Ok(PubsubMessage::SingleAttestation(Box::new((
+                                        *subnet_id,
+                                        single_attestation,
+                                    ))))
+                                } else {
+                                    let attestation = Attestation::Base(
+                                        AttestationBase::from_ssz_bytes(data)
+                                            .map_err(|e| format!("{:?}", e))?,
+                                    );
+                                    Ok(PubsubMessage::Attestation(Box::new((
+                                        *subnet_id,
+                                        attestation,
+                                    ))))
                                 }
-                                None => {
-                                    return Err(format!(
-                                        "Unknown gossipsub fork digest: {:?}",
-                                        gossip_topic.fork_digest
-                                    ))
-                                }
-                            };
-                        Ok(PubsubMessage::Attestation(Box::new((
-                            *subnet_id,
-                            attestation,
-                        ))))
+                            }
+                            None => Err(format!(
+                                "Unknown gossipsub fork digest: {:?}",
+                                gossip_topic.fork_digest
+                            )),
+                        }
                     }
                     GossipKind::BeaconBlock => {
                         let beacon_block =

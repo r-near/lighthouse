@@ -50,7 +50,7 @@ use tokio::sync::{
     mpsc::{Sender, UnboundedSender},
     oneshot,
 };
-use types::{attestation::SingleAttestation, Attestation, EthSpec};
+use types::{Attestation, EthSpec, SingleAttestation};
 
 // Error variants are only used in `Debug` and considered `dead_code` by the compiler.
 #[derive(Debug)]

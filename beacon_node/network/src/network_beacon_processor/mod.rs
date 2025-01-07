@@ -1,7 +1,6 @@
 use crate::sync::manager::BlockProcessType;
 use crate::sync::SamplingId;
 use crate::{service::NetworkMessage, sync::manager::SyncMessage};
-use attestation::SingleAttestation;
 use beacon_chain::blob_verification::{GossipBlobError, GossipVerifiedBlob};
 use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::data_column_verification::{observe_gossip_data_column, GossipDataColumnError};

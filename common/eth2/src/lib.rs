@@ -36,7 +36,6 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 use store::fork_versioned_response::ExecutionOptimisticFinalizedForkVersionedResponse;
-use types::attestation::SingleAttestation;
 
 pub const V1: EndpointVersion = EndpointVersion(1);
 pub const V2: EndpointVersion = EndpointVersion(2);

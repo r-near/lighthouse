@@ -60,9 +60,9 @@ use std::borrow::Cow;
 use strum::AsRefStr;
 use tree_hash::TreeHash;
 use types::{
-    attestation::SingleAttestation, Attestation, AttestationRef, BeaconCommittee,
-    BeaconStateError::NoCommitteeFound, ChainSpec, CommitteeIndex, Epoch, EthSpec, Hash256,
-    IndexedAttestation, SelectionProof, SignedAggregateAndProof, Slot, SubnetId,
+    Attestation, AttestationRef, BeaconCommittee, BeaconStateError::NoCommitteeFound, ChainSpec,
+    CommitteeIndex, Epoch, EthSpec, Hash256, IndexedAttestation, SelectionProof,
+    SignedAggregateAndProof, SingleAttestation, Slot, SubnetId,
 };
 
 pub use batch::{batch_verify_aggregated_attestations, batch_verify_unaggregated_attestations};

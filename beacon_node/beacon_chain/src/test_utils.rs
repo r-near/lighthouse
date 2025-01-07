@@ -16,7 +16,6 @@ use crate::{
     BeaconChain, BeaconChainTypes, BlockError, ChainConfig, ServerSentEventHandler,
     StateSkipConfig,
 };
-use attestation::SingleAttestation;
 use bls::get_withdrawal_credentials;
 use eth2::types::SignedBlockContentsTuple;
 use execution_layer::test_utils::generate_genesis_header;

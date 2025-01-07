@@ -39,9 +39,9 @@ use tokio::time::Duration;
 use tree_hash::TreeHash;
 use types::application_domain::ApplicationDomain;
 use types::{
-    attestation::AttestationBase, attestation::SingleAttestation, AggregateSignature, BitList,
-    Domain, EthSpec, ExecutionBlockHash, Hash256, Keypair, MainnetEthSpec, RelativeEpoch,
-    SelectionProof, SignedRoot, Slot,
+    attestation::AttestationBase, AggregateSignature, BitList, Domain, EthSpec, ExecutionBlockHash,
+    Hash256, Keypair, MainnetEthSpec, RelativeEpoch, SelectionProof, SignedRoot, SingleAttestation,
+    Slot,
 };
 
 type E = MainnetEthSpec;
