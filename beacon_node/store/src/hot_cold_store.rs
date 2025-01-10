@@ -163,7 +163,7 @@ pub enum HotColdDBError {
     MissingRestorePoint(Hash256),
     MissingColdStateSummary(Hash256),
     MissingHotStateSummary(Hash256),
-    MissingEpochBoundaryState(Hash256),
+    MissingEpochBoundaryState(Hash256, Hash256),
     MissingPrevState(Hash256),
     MissingSplitState(Hash256, Slot),
     MissingStateDiff(Hash256),
@@ -1137,7 +1137,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         {
             // NOTE: minor inefficiency here because we load an unnecessary hot state summary
             let (state, _) = self.load_hot_state(&epoch_boundary_state_root)?.ok_or(
-                HotColdDBError::MissingEpochBoundaryState(epoch_boundary_state_root),
+                HotColdDBError::MissingEpochBoundaryState(epoch_boundary_state_root, *state_root),
             )?;
             Ok(Some(state))
         } else {
@@ -1485,7 +1485,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
         // On the epoch boundary, store the full state.
         if state.slot() % E::slots_per_epoch() == 0 {
-            trace!(
+            debug!(
                 self.log,
                 "Storing full state on epoch boundary";
                 "slot" => state.slot().as_u64(),
@@ -1565,7 +1565,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         {
             let mut boundary_state =
                 get_full_state(&self.hot_db, &epoch_boundary_state_root, &self.spec)?.ok_or(
-                    HotColdDBError::MissingEpochBoundaryState(epoch_boundary_state_root),
+                    HotColdDBError::MissingEpochBoundaryState(
+                        epoch_boundary_state_root,
+                        *state_root,
+                    ),
                 )?;
 
             // Immediately rebase the state from disk on the finalized state so that we can reuse

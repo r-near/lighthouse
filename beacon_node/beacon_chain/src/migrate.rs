@@ -462,7 +462,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         new_finalized_checkpoint: Checkpoint,
         log: &Logger,
     ) -> Result<PruningOutcome, BeaconChainError> {
-        let split_state_root = store.get_split_info().state_root;
         let new_finalized_slot = new_finalized_checkpoint
             .epoch
             .start_slot(E::slots_per_epoch());
@@ -493,8 +492,22 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             let state_summaries = store
                 .load_hot_state_summaries()?
                 .into_iter()
-                .map(|(state_root, summary)| (state_root, summary.into()))
-                .collect::<Vec<(Hash256, DAGStateSummaryV22)>>();
+                .map(|(state_root, summary)| {
+                    let block_root = summary.latest_block_root;
+                    let block = store
+                        .get_blinded_block(&block_root)?
+                        .ok_or(PruningError::MissingBlindedBlock(block_root))?;
+                    Ok((
+                        state_root,
+                        DAGStateSummaryV22 {
+                            slot: summary.slot,
+                            latest_block_root: summary.latest_block_root,
+                            block_slot: block.slot(),
+                            block_parent_root: block.parent_root(),
+                        },
+                    ))
+                })
+                .collect::<Result<Vec<(Hash256, DAGStateSummaryV22)>, BeaconChainError>>()?;
 
             // De-duplicate block roots to reduce block reads below
             let summary_block_roots = HashSet::<Hash256>::from_iter(
@@ -512,34 +525,23 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 ));
             }
 
-            let blocks = summary_block_roots
-                .iter()
-                .map(|block_root| {
-                    let block = store
-                        .get_blinded_block(block_root)?
-                        .ok_or(PruningError::MissingBlindedBlock(*block_root))?;
-                    Ok((
-                        *block_root,
+            // Collect and de-duplicate block summaries from state summaries
+            let unique_blocks = HashMap::<Hash256, DAGBlockSummary>::from_iter(
+                state_summaries.iter().map(|(_, summary)| {
+                    (
+                        summary.latest_block_root,
                         DAGBlockSummary {
-                            slot: block.slot(),
-                            parent_root: block.parent_root(),
+                            slot: summary.block_slot,
+                            parent_root: summary.block_parent_root,
                         },
-                    ))
-                })
-                .collect::<Result<Vec<_>, BeaconChainError>>()?;
-
-            let parent_block_roots = blocks
-                .iter()
-                .map(|(block_root, block)| (*block_root, block.parent_root))
-                .collect::<HashMap<Hash256, Hash256>>();
+                    )
+                }),
+            );
+            let blocks = unique_blocks.into_iter().collect::<Vec<_>>();
 
             (
-                StateSummariesDAG::new_from_v22(
-                    state_summaries,
-                    parent_block_roots,
-                    split_state_root,
-                )
-                .map_err(PruningError::SummariesDagError)?,
+                StateSummariesDAG::new_from_v22(state_summaries)
+                    .map_err(PruningError::SummariesDagError)?,
                 BlockSummariesDAG::new(&blocks),
             )
         };

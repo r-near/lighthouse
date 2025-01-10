@@ -2,7 +2,6 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
 };
-use store::HotStateSummary;
 use types::{Hash256, Slot};
 
 #[derive(Debug, Clone, Copy)]
@@ -16,6 +15,8 @@ pub struct DAGStateSummary {
 pub struct DAGStateSummaryV22 {
     pub slot: Slot,
     pub latest_block_root: Hash256,
+    pub block_slot: Slot,
+    pub block_parent_root: Hash256,
 }
 
 pub struct StateSummariesDAG {
@@ -27,12 +28,13 @@ pub struct StateSummariesDAG {
 
 #[derive(Debug)]
 pub enum Error {
-    MissingParentBlockRoot(Hash256),
     MissingStateSummary(Hash256),
+    MissingStateSummaryByBlockRoot(Hash256),
     MissingStateSummaryAtSlot(Hash256, Slot),
     MissingChildBlockRoot(Hash256),
     MissingBlock(Hash256),
     RequestedSlotAboveSummary(Hash256, Slot),
+    RootUnknownPreviousStateRoot(Hash256, Slot),
 }
 
 impl StateSummariesDAG {
@@ -57,10 +59,15 @@ impl StateSummariesDAG {
         }
     }
 
+    /// Computes a DAG from a sequence of state summaries, including their parent block
+    /// relationships.
+    ///
+    /// - Expects summaries to be contiguous per slot: there must exist a summary at every slot
+    ///   of each tree branch
+    /// - Maybe include multiple disjoint trees. The root of each tree will have a ZERO parent state
+    ///   root, which will error later when calling `previous_state_root`.
     pub fn new_from_v22(
         state_summaries_v22: Vec<(Hash256, DAGStateSummaryV22)>,
-        parent_block_roots: HashMap<Hash256, Hash256>,
-        base_root: Hash256,
     ) -> Result<Self, Error> {
         // Group them by latest block root, and sorted state slot
         let mut state_summaries_by_block_root = HashMap::<_, BTreeMap<_, _>>::new();
@@ -76,7 +83,7 @@ impl StateSummariesDAG {
         let state_summaries = state_summaries_v22
             .iter()
             .map(|(state_root, summary)| {
-                let previous_state_root = if summary.slot == 0 || *state_root == base_root {
+                let previous_state_root = if summary.slot == 0 {
                     Hash256::ZERO
                 } else {
                     let previous_slot = summary.slot - 1;
@@ -84,24 +91,37 @@ impl StateSummariesDAG {
                     // Check the set of states in the same state's block root
                     let same_block_root_summaries = state_summaries_by_block_root
                         .get(&summary.latest_block_root)
-                        .ok_or(Error::MissingStateSummary(summary.latest_block_root))?;
+                        // Should never error: we construct the HashMap here and must have at least
+                        // one entry per block root
+                        .ok_or(Error::MissingStateSummaryByBlockRoot(
+                            summary.latest_block_root,
+                        ))?;
                     if let Some((state_root, _)) = same_block_root_summaries.get(&previous_slot) {
                         // Skipped slot: block root at previous slot is the same as latest block root.
                         **state_root
                     } else {
                         // Common case: not a skipped slot.
-                        let parent_block_root = parent_block_roots
-                            .get(&summary.latest_block_root)
-                            .ok_or(Error::MissingParentBlockRoot(summary.latest_block_root))?;
-                        *state_summaries_by_block_root
-                            .get(parent_block_root)
-                            .ok_or(Error::MissingStateSummary(*parent_block_root))?
-                            .get(&previous_slot)
-                            .ok_or(Error::MissingStateSummaryAtSlot(
-                                *parent_block_root,
-                                previous_slot,
-                            ))?
-                            .0
+                        let parent_block_root = summary.block_parent_root;
+                        if let Some(parent_block_summaries) =
+                            state_summaries_by_block_root.get(&parent_block_root)
+                        {
+                            *parent_block_summaries
+                                .get(&previous_slot)
+                                // Should never error: summaries are continuous, so if there's an
+                                // entry it must contain at least one summary at the previous slot.
+                                .ok_or(Error::MissingStateSummaryAtSlot(
+                                    parent_block_root,
+                                    previous_slot,
+                                ))?
+                                .0
+                        } else {
+                            // We don't know of any summary with this parent block root. We'll
+                            // consider this summary to be a root of `state_summaries_v22`
+                            // collection and mark it as zero.
+                            // The test store_tests::finalizes_non_epoch_start_slot manages to send two
+                            // disjoint trees on its second migration.
+                            Hash256::ZERO
+                        }
                     }
                 };
 
@@ -142,11 +162,18 @@ impl StateSummariesDAG {
     }
 
     pub fn previous_state_root(&self, state_root: Hash256) -> Result<Hash256, Error> {
-        Ok(self
+        let summary = self
             .state_summaries_by_state_root
             .get(&state_root)
-            .ok_or(Error::MissingStateSummary(state_root))?
-            .previous_state_root)
+            .ok_or(Error::MissingStateSummary(state_root))?;
+        if summary.previous_state_root == Hash256::ZERO {
+            Err(Error::RootUnknownPreviousStateRoot(
+                state_root,
+                summary.slot,
+            ))
+        } else {
+            Ok(summary.previous_state_root)
+        }
     }
 
     pub fn ancestor_state_root_at_slot(
@@ -170,7 +197,14 @@ impl StateSummariesDAG {
                     return Ok(state_root);
                 }
                 Ordering::Greater => {
-                    state_root = summary.previous_state_root;
+                    if summary.previous_state_root == Hash256::ZERO {
+                        return Err(Error::RootUnknownPreviousStateRoot(
+                            state_root,
+                            summary.slot,
+                        ));
+                    } else {
+                        state_root = summary.previous_state_root;
+                    }
                 }
             }
         }
@@ -192,15 +226,6 @@ impl StateSummariesDAG {
             } else {
                 return Ok(ancestors);
             }
-        }
-    }
-}
-
-impl From<HotStateSummary> for DAGStateSummaryV22 {
-    fn from(value: HotStateSummary) -> Self {
-        Self {
-            slot: value.slot,
-            latest_block_root: value.latest_block_root,
         }
     }
 }
@@ -284,7 +309,6 @@ impl BlockSummariesDAG {
 mod tests {
     use super::{BlockSummariesDAG, DAGBlockSummary, DAGStateSummaryV22, Error, StateSummariesDAG};
     use bls::FixedBytesExtended;
-    use std::collections::HashMap;
     use types::{Hash256, Slot};
 
     fn root(n: u64) -> Hash256 {
@@ -300,7 +324,7 @@ mod tests {
 
     #[test]
     fn new_from_v22_empty() {
-        StateSummariesDAG::new_from_v22(vec![], HashMap::new(), Hash256::ZERO).unwrap();
+        StateSummariesDAG::new_from_v22(vec![]).unwrap();
     }
 
     #[test]
@@ -311,15 +335,76 @@ mod tests {
         let summary_1 = DAGStateSummaryV22 {
             slot: Slot::new(1),
             latest_block_root: root_1,
+            block_parent_root: root_2,
+            block_slot: Slot::new(1),
         };
-        //                                 (child, parent)
-        let parents = HashMap::from_iter([(root_1, root_2)]);
 
-        let dag =
-            StateSummariesDAG::new_from_v22(vec![(root_a, summary_1)], parents, root_a).unwrap();
+        let dag = StateSummariesDAG::new_from_v22(vec![(root_a, summary_1)]).unwrap();
 
         // The parent of the root summary is ZERO
         assert_eq!(dag.previous_state_root(root_a).unwrap(), Hash256::ZERO);
+    }
+
+    #[test]
+    fn new_from_v22_multiple_states() {
+        let dag = StateSummariesDAG::new_from_v22(vec![
+            (
+                root(0xa),
+                DAGStateSummaryV22 {
+                    slot: Slot::new(3),
+                    latest_block_root: root(3),
+                    block_parent_root: root(1),
+                    block_slot: Slot::new(3),
+                },
+            ),
+            (
+                root(0xb),
+                DAGStateSummaryV22 {
+                    slot: Slot::new(4),
+                    latest_block_root: root(4),
+                    block_parent_root: root(3),
+                    block_slot: Slot::new(4),
+                },
+            ),
+            // fork 1
+            (
+                root(0xc),
+                DAGStateSummaryV22 {
+                    slot: Slot::new(5),
+                    latest_block_root: root(5),
+                    block_parent_root: root(4),
+                    block_slot: Slot::new(5),
+                },
+            ),
+            // fork 2
+            // skipped slot
+            (
+                root(0xd),
+                DAGStateSummaryV22 {
+                    slot: Slot::new(5),
+                    latest_block_root: root(4),
+                    block_parent_root: root(3),
+                    block_slot: Slot::new(4),
+                },
+            ),
+            // normal slot
+            (
+                root(0xe),
+                DAGStateSummaryV22 {
+                    slot: Slot::new(6),
+                    latest_block_root: root(6),
+                    block_parent_root: root(4),
+                    block_slot: Slot::new(6),
+                },
+            ),
+        ])
+        .unwrap();
+
+        // The parent of the root summary is ZERO
+        assert_eq!(dag.previous_state_root(root(0xa)).unwrap(), Hash256::ZERO);
+        assert_eq!(dag.previous_state_root(root(0xc)).unwrap(), root(0xb));
+        assert_eq!(dag.previous_state_root(root(0xd)).unwrap(), root(0xb));
+        assert_eq!(dag.previous_state_root(root(0xe)).unwrap(), root(0xd));
     }
 
     #[test]
