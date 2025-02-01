@@ -228,6 +228,10 @@ pub enum BeaconChainError {
     EmptyRpcCustodyColumns,
     AttestationError(AttestationError),
     AttestationCommitteeIndexNotSet,
+    InsufficientColumnsToReconstructBlobs {
+        columns_found: usize,
+    },
+    FailedToReconstructBlobs(String),
 }
 
 easy_from_to!(SlotProcessingError, BeaconChainError);
