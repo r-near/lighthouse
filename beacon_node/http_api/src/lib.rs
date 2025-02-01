@@ -89,8 +89,8 @@ use types::{
     AttesterSlashing, BeaconStateError, ChainSpec, CommitteeCache, ConfigAndPreset, Epoch, EthSpec,
     ForkName, ForkVersionedResponse, Hash256, ProposerPreparationData, ProposerSlashing,
     RelativeEpoch, SignedAggregateAndProof, SignedBlindedBeaconBlock, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot,
-    SyncCommitteeMessage, SyncContributionData, SignedInclusionList
+    SignedContributionAndProof, SignedInclusionList, SignedValidatorRegistrationData,
+    SignedVoluntaryExit, Slot, SyncCommitteeMessage, SyncContributionData,
 };
 use validator::pubkey_to_validator_index;
 use version::{
@@ -3588,11 +3588,9 @@ pub fn serve<T: BeaconChainTypes>(
                 task_spawner.spawn_async_with_rejection(Priority::P0, async move {
                     not_synced_filter?;
 
-                    let current_slot = chain
-                        .slot()
-                        .unwrap();
-                        // TODO(focil) unwrap
-                        // .map_err(warp_utils::reject::beacon_chain_error)?;
+                    let current_slot = chain.slot().unwrap();
+                    // TODO(focil) unwrap
+                    // .map_err(warp_utils::reject::beacon_chain_error)?;
 
                     // allow a tolerance of one slot to account for clock skew
                     //
@@ -3610,7 +3608,7 @@ pub fn serve<T: BeaconChainTypes>(
                         .map(api_types::GenericResponse::from)
                         // TODO(focil) unwrap
                         .unwrap();
-                        // .map_err(warp_utils::reject::beacon_chain_error)?;
+                    // .map_err(warp_utils::reject::beacon_chain_error)?;
                     Ok::<_, warp::reject::Rejection>(warp::reply::json(&data).into_response())
                 })
             },

@@ -14,7 +14,8 @@ use types::{
     SignedBeaconBlock, SignedBeaconBlockAltair, SignedBeaconBlockBase, SignedBeaconBlockBellatrix,
     SignedBeaconBlockCapella, SignedBeaconBlockDeneb, SignedBeaconBlockElectra,
     SignedBeaconBlockFulu, SignedBlsToExecutionChange, SignedContributionAndProof,
-    SignedVoluntaryExit, SingleAttestation, SubnetId, SyncCommitteeMessage, SyncSubnetId, SignedInclusionList,
+    SignedInclusionList, SignedVoluntaryExit, SingleAttestation, SubnetId, SyncCommitteeMessage,
+    SyncSubnetId,
 };
 
 #[derive(Debug, Clone, PartialEq)]

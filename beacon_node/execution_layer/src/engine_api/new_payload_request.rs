@@ -271,7 +271,7 @@ impl<'a, E: EthSpec> TryFrom<BeaconBlockRef<'a, E>> for NewPayloadRequest<'a, E>
                     .collect(),
                 parent_beacon_block_root: block_ref.parent_root,
                 execution_requests: &block_ref.body.execution_requests,
-                il_transactions: vec![].into()
+                il_transactions: vec![].into(),
             })),
         }
     }
