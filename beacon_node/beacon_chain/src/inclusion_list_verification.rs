@@ -29,7 +29,7 @@ impl From<BeaconChainError> for GossipInclusionListError {
 }
 
 pub struct GossipVerifiedInclusionList<T: BeaconChainTypes> {
-    signed_il: SignedInclusionList<T::EthSpec>,
+    pub signed_il: SignedInclusionList<T::EthSpec>,
 }
 
 impl<T: BeaconChainTypes> GossipVerifiedInclusionList<T> {

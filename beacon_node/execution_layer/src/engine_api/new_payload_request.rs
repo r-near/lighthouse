@@ -5,15 +5,15 @@ use state_processing::per_block_processing::deneb::kzg_commitment_to_versioned_h
 use superstruct::superstruct;
 use types::{
     BeaconBlockRef, BeaconStateError, EthSpec, ExecutionBlockHash, ExecutionPayload,
-    ExecutionPayloadRef, Hash256, VersionedHash,
+    ExecutionPayloadRef, Hash256, InclusionListTransactions, VersionedHash,
 };
 use types::{
     ExecutionPayloadBellatrix, ExecutionPayloadCapella, ExecutionPayloadDeneb,
-    ExecutionPayloadElectra, ExecutionRequests,
+    ExecutionPayloadElectra, ExecutionPayloadFulu, ExecutionRequests,
 };
 
 #[superstruct(
-    variants(Bellatrix, Capella, Deneb, Electra),
+    variants(Bellatrix, Capella, Deneb, Electra, Fulu),
     variant_attributes(derive(Clone, Debug, PartialEq),),
     map_into(ExecutionPayload),
     map_ref_into(ExecutionPayloadRef),
@@ -39,12 +39,16 @@ pub struct NewPayloadRequest<'block, E: EthSpec> {
     pub execution_payload: &'block ExecutionPayloadDeneb<E>,
     #[superstruct(only(Electra), partial_getter(rename = "execution_payload_electra"))]
     pub execution_payload: &'block ExecutionPayloadElectra<E>,
-    #[superstruct(only(Deneb, Electra))]
+    #[superstruct(only(Fulu), partial_getter(rename = "execution_payload_fulu"))]
+    pub execution_payload: &'block ExecutionPayloadFulu<E>,
+    #[superstruct(only(Deneb, Electra, Fulu))]
     pub versioned_hashes: Vec<VersionedHash>,
-    #[superstruct(only(Deneb, Electra))]
+    #[superstruct(only(Deneb, Electra, Fulu))]
     pub parent_beacon_block_root: Hash256,
-    #[superstruct(only(Electra))]
+    #[superstruct(only(Electra, Fulu))]
     pub execution_requests: &'block ExecutionRequests<E>,
+    #[superstruct(only(Electra, Fulu))]
+    pub il_transactions: InclusionListTransactions<E>,
 }
 
 impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
@@ -54,6 +58,7 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
             Self::Capella(payload) => payload.execution_payload.parent_hash,
             Self::Deneb(payload) => payload.execution_payload.parent_hash,
             Self::Electra(payload) => payload.execution_payload.parent_hash,
+            Self::Fulu(payload) => payload.execution_payload.parent_hash,
         }
     }
 
@@ -63,6 +68,7 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
             Self::Capella(payload) => payload.execution_payload.block_hash,
             Self::Deneb(payload) => payload.execution_payload.block_hash,
             Self::Electra(payload) => payload.execution_payload.block_hash,
+            Self::Fulu(payload) => payload.execution_payload.block_hash,
         }
     }
 
@@ -72,6 +78,7 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
             Self::Capella(payload) => payload.execution_payload.block_number,
             Self::Deneb(payload) => payload.execution_payload.block_number,
             Self::Electra(payload) => payload.execution_payload.block_number,
+            Self::Fulu(payload) => payload.execution_payload.block_number,
         }
     }
 
@@ -81,6 +88,7 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
             Self::Capella(request) => ExecutionPayloadRef::Capella(request.execution_payload),
             Self::Deneb(request) => ExecutionPayloadRef::Deneb(request.execution_payload),
             Self::Electra(request) => ExecutionPayloadRef::Electra(request.execution_payload),
+            Self::Fulu(request) => ExecutionPayloadRef::Fulu(request.execution_payload),
         }
     }
 
@@ -92,6 +100,7 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
             Self::Capella(request) => ExecutionPayload::Capella(request.execution_payload.clone()),
             Self::Deneb(request) => ExecutionPayload::Deneb(request.execution_payload.clone()),
             Self::Electra(request) => ExecutionPayload::Electra(request.execution_payload.clone()),
+            Self::Fulu(request) => ExecutionPayload::Fulu(request.execution_payload.clone()),
         }
     }
 
@@ -120,6 +129,11 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
         let parent_beacon_block_root = self.parent_beacon_block_root().ok().cloned();
 
         let _timer = metrics::start_timer(&metrics::EXECUTION_LAYER_VERIFY_BLOCK_HASH);
+
+        // Check that no transactions in the payload are zero length
+        if payload.transactions().iter().any(|slice| slice.is_empty()) {
+            return Err(Error::ZeroLengthTransaction);
+        }
 
         let (header_hash, rlp_transactions_root) = calculate_execution_block_hash(
             payload,
@@ -153,13 +167,14 @@ impl<'block, E: EthSpec> NewPayloadRequest<'block, E> {
     }
 }
 
-impl<'a, E: EthSpec> TryFrom<BeaconBlockRef<'a, E>> for NewPayloadRequest<'a, E> {
-    type Error = BeaconStateError;
-
-    fn try_from(block: BeaconBlockRef<'a, E>) -> Result<Self, Self::Error> {
+impl<'a, E: EthSpec> NewPayloadRequest<'a, E> {
+    pub fn try_from_block_and_il_transactions(
+        block: BeaconBlockRef<'a, E>,
+        il_transactions: InclusionListTransactions<E>,
+    ) -> Result<Self, BeaconStateError> {
         match block {
             BeaconBlockRef::Base(_) | BeaconBlockRef::Altair(_) => {
-                Err(Self::Error::IncorrectStateVariant)
+                Err(BeaconStateError::IncorrectStateVariant)
             }
             BeaconBlockRef::Bellatrix(block_ref) => {
                 Ok(Self::Bellatrix(NewPayloadRequestBellatrix {
@@ -189,6 +204,74 @@ impl<'a, E: EthSpec> TryFrom<BeaconBlockRef<'a, E>> for NewPayloadRequest<'a, E>
                     .collect(),
                 parent_beacon_block_root: block_ref.parent_root,
                 execution_requests: &block_ref.body.execution_requests,
+                il_transactions,
+            })),
+            BeaconBlockRef::Fulu(block_ref) => Ok(Self::Fulu(NewPayloadRequestFulu {
+                execution_payload: &block_ref.body.execution_payload.execution_payload,
+                versioned_hashes: block_ref
+                    .body
+                    .blob_kzg_commitments
+                    .iter()
+                    .map(kzg_commitment_to_versioned_hash)
+                    .collect(),
+                parent_beacon_block_root: block_ref.parent_root,
+                execution_requests: &block_ref.body.execution_requests,
+                il_transactions,
+            })),
+        }
+    }
+}
+
+impl<'a, E: EthSpec> TryFrom<BeaconBlockRef<'a, E>> for NewPayloadRequest<'a, E> {
+    type Error = BeaconStateError;
+
+    fn try_from(block: BeaconBlockRef<'a, E>) -> Result<Self, Self::Error> {
+        match block {
+            BeaconBlockRef::Base(_) | BeaconBlockRef::Altair(_) => {
+                Err(Self::Error::IncorrectStateVariant)
+            }
+            BeaconBlockRef::Bellatrix(block_ref) => {
+                Ok(Self::Bellatrix(NewPayloadRequestBellatrix {
+                    execution_payload: &block_ref.body.execution_payload.execution_payload,
+                }))
+            }
+            BeaconBlockRef::Capella(block_ref) => Ok(Self::Capella(NewPayloadRequestCapella {
+                execution_payload: &block_ref.body.execution_payload.execution_payload,
+            })),
+            BeaconBlockRef::Deneb(block_ref) => Ok(Self::Deneb(NewPayloadRequestDeneb {
+                execution_payload: &block_ref.body.execution_payload.execution_payload,
+                versioned_hashes: block_ref
+                    .body
+                    .blob_kzg_commitments
+                    .iter()
+                    .map(kzg_commitment_to_versioned_hash)
+                    .collect(),
+                parent_beacon_block_root: block_ref.parent_root,
+            })),
+            // TODO(focil) need to clean up this conversion
+            BeaconBlockRef::Electra(block_ref) => Ok(Self::Electra(NewPayloadRequestElectra {
+                execution_payload: &block_ref.body.execution_payload.execution_payload,
+                versioned_hashes: block_ref
+                    .body
+                    .blob_kzg_commitments
+                    .iter()
+                    .map(kzg_commitment_to_versioned_hash)
+                    .collect(),
+                parent_beacon_block_root: block_ref.parent_root,
+                execution_requests: &block_ref.body.execution_requests,
+                il_transactions: vec![].into(),
+            })),
+            BeaconBlockRef::Fulu(block_ref) => Ok(Self::Fulu(NewPayloadRequestFulu {
+                execution_payload: &block_ref.body.execution_payload.execution_payload,
+                versioned_hashes: block_ref
+                    .body
+                    .blob_kzg_commitments
+                    .iter()
+                    .map(kzg_commitment_to_versioned_hash)
+                    .collect(),
+                parent_beacon_block_root: block_ref.parent_root,
+                execution_requests: &block_ref.body.execution_requests,
+                il_transactions: vec![].into()
             })),
         }
     }
@@ -209,6 +292,7 @@ impl<'a, E: EthSpec> TryFrom<ExecutionPayloadRef<'a, E>> for NewPayloadRequest<'
             })),
             ExecutionPayloadRef::Deneb(_) => Err(Self::Error::IncorrectStateVariant),
             ExecutionPayloadRef::Electra(_) => Err(Self::Error::IncorrectStateVariant),
+            ExecutionPayloadRef::Fulu(_) => Err(Self::Error::IncorrectStateVariant),
         }
     }
 }

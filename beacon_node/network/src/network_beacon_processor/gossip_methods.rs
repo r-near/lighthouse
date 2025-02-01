@@ -1293,13 +1293,12 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             Err(e @ BlockError::StateRootMismatch { .. })
             | Err(e @ BlockError::IncorrectBlockProposer { .. })
             | Err(e @ BlockError::BlockSlotLimitReached)
-            | Err(e @ BlockError::ProposalSignatureInvalid)
             | Err(e @ BlockError::NonLinearSlots)
             | Err(e @ BlockError::UnknownValidator(_))
             | Err(e @ BlockError::PerBlockProcessingError(_))
             | Err(e @ BlockError::NonLinearParentRoots)
             | Err(e @ BlockError::BlockIsNotLaterThanParent { .. })
-            | Err(e @ BlockError::InvalidSignature)
+            | Err(e @ BlockError::InvalidSignature(_))
             | Err(e @ BlockError::WeakSubjectivityConflict)
             | Err(e @ BlockError::InconsistentFork(_))
             | Err(e @ BlockError::ExecutionPayloadError(_))
@@ -2165,16 +2164,21 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
         };
     }
 
+    // TODO(focil) unused variables
     pub fn process_gossip_inclusion_list(
         self: &Arc<Self>,
-        message_id: MessageId,
-        peer_id: PeerId,
+        _message_id: MessageId,
+        _peer_id: PeerId,
         il: SignedInclusionList<T::EthSpec>,
-        seen_timestamp: Duration,
+        _seen_timestamp: Duration,
     ) {
         match GossipVerifiedInclusionList::verify(&il, &self.chain) {
             Ok(gossip_verified_il) => {
                 debug!(self.log, "Successfully verified gossip inclusion list");
+                // Store validated inclusion list in the IL cache. This also catches
+                // equivocating IL's and handles them accordingly.
+                self.chain
+                    .on_verified_inclusion_list(gossip_verified_il.signed_il);
             }
             Err(err) => match err {
                 GossipInclusionListError::FutureSlot { .. }
@@ -3161,7 +3165,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
             .chain
             .slot_clock
             .now()
-            .map_or(false, |current_slot| sync_message_slot == current_slot);
+            .is_some_and(|current_slot| sync_message_slot == current_slot);
 
         self.propagate_if_timely(is_timely, message_id, peer_id)
     }

@@ -10,7 +10,7 @@ use fork_choice::ForkChoiceStore;
 use proto_array::JustifiedBalances;
 use safe_arith::ArithError;
 use ssz_derive::{Decode, Encode};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use store::{Error as StoreError, HotColdDB, ItemStore};
@@ -140,6 +140,8 @@ pub struct BeaconForkChoiceStore<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<
     unrealized_finalized_checkpoint: Checkpoint,
     proposer_boost_root: Hash256,
     equivocating_indices: BTreeSet<u64>,
+    inclusion_list_equivocators: HashMap<(Slot, Hash256), BTreeSet<u64>>,
+    unsatisfied_inclusion_list_block: Hash256,
     _phantom: PhantomData<E>,
 }
 
@@ -189,6 +191,8 @@ where
             unrealized_finalized_checkpoint: finalized_checkpoint,
             proposer_boost_root: Hash256::zero(),
             equivocating_indices: BTreeSet::new(),
+            inclusion_list_equivocators: HashMap::new(),
+            unsatisfied_inclusion_list_block: Hash256::zero(),
             _phantom: PhantomData,
         })
     }
@@ -206,6 +210,7 @@ where
             unrealized_finalized_checkpoint: self.unrealized_finalized_checkpoint,
             proposer_boost_root: self.proposer_boost_root,
             equivocating_indices: self.equivocating_indices.clone(),
+            unsatisfied_inclusion_list_block: self.unsatisfied_inclusion_list_block,
         }
     }
 
@@ -227,6 +232,8 @@ where
             unrealized_finalized_checkpoint: persisted.unrealized_finalized_checkpoint,
             proposer_boost_root: persisted.proposer_boost_root,
             equivocating_indices: persisted.equivocating_indices,
+            inclusion_list_equivocators: HashMap::new(),
+            unsatisfied_inclusion_list_block: persisted.unsatisfied_inclusion_list_block,
             _phantom: PhantomData,
         })
     }
@@ -344,6 +351,14 @@ where
     fn extend_equivocating_indices(&mut self, indices: impl IntoIterator<Item = u64>) {
         self.equivocating_indices.extend(indices);
     }
+
+    fn set_unsatisfied_inclusion_list_block(&mut self, block_root: Hash256) {
+        self.unsatisfied_inclusion_list_block = block_root;
+    }
+
+    fn unsatisfied_inclusion_list_block(&self) -> &Hash256 {
+        &self.unsatisfied_inclusion_list_block
+    }
 }
 
 pub type PersistedForkChoiceStore = PersistedForkChoiceStoreV17;
@@ -360,4 +375,5 @@ pub struct PersistedForkChoiceStore {
     pub unrealized_finalized_checkpoint: Checkpoint,
     pub proposer_boost_root: Hash256,
     pub equivocating_indices: BTreeSet<u64>,
+    pub unsatisfied_inclusion_list_block: Hash256,
 }

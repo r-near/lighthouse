@@ -134,6 +134,7 @@ pub struct ProtoArray {
     pub finalized_checkpoint: Checkpoint,
     pub nodes: Vec<ProtoNode>,
     pub indices: HashMap<Hash256, usize>,
+    pub unsatisfied_inclusion_list_block: Hash256,
     pub previous_proposer_boost: ProposerBoost,
 }
 
@@ -195,8 +196,12 @@ impl ProtoArray {
 
             let execution_status_is_invalid = node.execution_status.is_invalid();
 
-            let mut node_delta = if execution_status_is_invalid {
-                // If the node has an invalid execution payload, reduce its weight to zero.
+            // TODO(focil) seems sketchy...
+            let mut node_delta = if execution_status_is_invalid
+                || node.root == self.unsatisfied_inclusion_list_block
+            {
+                // If the node has an invalid execution payload, or the payload doesn't satisfy
+                // an inclusion list, reduce its weight to zero.
                 0_i64
                     .checked_sub(node.weight as i64)
                     .ok_or(Error::InvalidExecutionDeltaOverflow(node_index))?
@@ -468,7 +473,7 @@ impl ProtoArray {
         // 1. The `head_block_root` is a descendant of `latest_valid_ancestor_hash`
         // 2. The `latest_valid_ancestor_hash` is equal to or a descendant of the finalized block.
         let latest_valid_ancestor_is_descendant =
-            latest_valid_ancestor_root.map_or(false, |ancestor_root| {
+            latest_valid_ancestor_root.is_some_and(|ancestor_root| {
                 self.is_descendant(ancestor_root, head_block_root)
                     && self.is_finalized_checkpoint_or_descendant::<E>(ancestor_root)
             });
@@ -505,13 +510,13 @@ impl ProtoArray {
                         // head.
                         if node
                             .best_child
-                            .map_or(false, |i| invalidated_indices.contains(&i))
+                            .is_some_and(|i| invalidated_indices.contains(&i))
                         {
                             node.best_child = None
                         }
                         if node
                             .best_descendant
-                            .map_or(false, |i| invalidated_indices.contains(&i))
+                            .is_some_and(|i| invalidated_indices.contains(&i))
                         {
                             node.best_descendant = None
                         }
@@ -887,6 +892,10 @@ impl ProtoArray {
             return false;
         }
 
+        if node.root == self.unsatisfied_inclusion_list_block {
+            return false;
+        }
+
         let genesis_epoch = Epoch::new(0);
         let current_epoch = current_slot.epoch(E::slots_per_epoch());
         let node_epoch = node.slot.epoch(E::slots_per_epoch());
@@ -999,7 +1008,7 @@ impl ProtoArray {
             node.unrealized_finalized_checkpoint,
             node.unrealized_justified_checkpoint,
         ] {
-            if checkpoint.map_or(false, |cp| cp == self.finalized_checkpoint) {
+            if checkpoint.is_some_and(|cp| cp == self.finalized_checkpoint) {
                 return true;
             }
         }
@@ -1037,7 +1046,7 @@ impl ProtoArray {
             .find(|node| {
                 node.execution_status
                     .block_hash()
-                    .map_or(false, |node_block_hash| node_block_hash == *block_hash)
+                    .is_some_and(|node_block_hash| node_block_hash == *block_hash)
             })
             .map(|node| node.root)
     }

@@ -136,6 +136,7 @@ pub struct BeaconProcessorQueueLengths {
     lc_optimistic_update_queue: usize,
     lc_finality_update_queue: usize,
     lc_update_range_queue: usize,
+    gossip_inclusion_list_queue: usize,
     api_request_p0_queue: usize,
     api_request_p1_queue: usize,
 }
@@ -204,6 +205,8 @@ impl BeaconProcessorQueueLengths {
             lc_optimistic_update_queue: 512,
             lc_finality_update_queue: 512,
             lc_update_range_queue: 512,
+            // TODO(focil) pick proper values
+            gossip_inclusion_list_queue: 64,
             api_request_p0_queue: 1024,
             api_request_p1_queue: 1024,
         })
@@ -625,6 +628,7 @@ pub enum Work<E: EthSpec> {
     LightClientOptimisticUpdateRequest(BlockingFn),
     LightClientFinalityUpdateRequest(BlockingFn),
     LightClientUpdatesByRangeRequest(BlockingFn),
+    GossipInclusionList(BlockingFn),
     ApiRequestP0(BlockingOrAsync),
     ApiRequestP1(BlockingOrAsync),
 }
@@ -677,6 +681,7 @@ pub enum WorkType {
     LightClientOptimisticUpdateRequest,
     LightClientFinalityUpdateRequest,
     LightClientUpdatesByRangeRequest,
+    GossipInclusionList,
     ApiRequestP0,
     ApiRequestP1,
 }
@@ -734,6 +739,7 @@ impl<E: EthSpec> Work<E> {
             Work::UnknownLightClientOptimisticUpdate { .. } => {
                 WorkType::UnknownLightClientOptimisticUpdate
             }
+            Work::GossipInclusionList { .. } => WorkType::GossipInclusionList,
             Work::ApiRequestP0 { .. } => WorkType::ApiRequestP0,
             Work::ApiRequestP1 { .. } => WorkType::ApiRequestP1,
         }
@@ -909,6 +915,8 @@ impl<E: EthSpec> BeaconProcessor<E> {
         let mut lc_finality_update_queue = FifoQueue::new(queue_lengths.lc_finality_update_queue);
         let mut lc_update_range_queue = FifoQueue::new(queue_lengths.lc_update_range_queue);
 
+        let mut gossip_inclusion_list_queue =
+            FifoQueue::new(queue_lengths.gossip_inclusion_list_queue);
         let mut api_request_p0_queue = FifoQueue::new(queue_lengths.api_request_p0_queue);
         let mut api_request_p1_queue = FifoQueue::new(queue_lengths.api_request_p1_queue);
 
@@ -1022,7 +1030,7 @@ impl<E: EthSpec> BeaconProcessor<E> {
                 let can_spawn = self.current_workers < self.config.max_workers;
                 let drop_during_sync = work_event
                     .as_ref()
-                    .map_or(false, |event| event.drop_during_sync);
+                    .is_some_and(|event| event.drop_during_sync);
 
                 let idle_tx = idle_tx.clone();
                 let modified_queue_id = match work_event {
@@ -1180,6 +1188,9 @@ impl<E: EthSpec> BeaconProcessor<E> {
                                     None
                                 }
                             }
+                        // TODO(focil) figure out priority and maybe introduce batching
+                        } else if let Some(item) = gossip_inclusion_list_queue.pop() {
+                            Some(item)
                         // Check sync committee messages after attestations as their rewards are lesser
                         // and they don't influence fork choice.
                         } else if let Some(item) = sync_contribution_queue.pop() {
@@ -1412,6 +1423,9 @@ impl<E: EthSpec> BeaconProcessor<E> {
                             Work::UnknownBlockSamplingRequest { .. } => {
                                 unknown_block_sampling_request_queue.push(work, work_id, &self.log)
                             }
+                            Work::GossipInclusionList { .. } => {
+                                gossip_inclusion_list_queue.push(work, work_id, &self.log)
+                            }
                             Work::ApiRequestP0 { .. } => {
                                 api_request_p0_queue.push(work, work_id, &self.log)
                             }
@@ -1479,6 +1493,7 @@ impl<E: EthSpec> BeaconProcessor<E> {
                         WorkType::LightClientFinalityUpdateRequest => {
                             lc_finality_update_queue.len()
                         }
+                        WorkType::GossipInclusionList => gossip_inclusion_list_queue.len(),
                         WorkType::LightClientUpdatesByRangeRequest => lc_update_range_queue.len(),
                         WorkType::ApiRequestP0 => api_request_p0_queue.len(),
                         WorkType::ApiRequestP1 => api_request_p1_queue.len(),
@@ -1633,9 +1648,8 @@ impl<E: EthSpec> BeaconProcessor<E> {
             | Work::LightClientBootstrapRequest(process_fn)
             | Work::LightClientOptimisticUpdateRequest(process_fn)
             | Work::LightClientFinalityUpdateRequest(process_fn)
-            | Work::LightClientUpdatesByRangeRequest(process_fn) => {
-                task_spawner.spawn_blocking(process_fn)
-            }
+            | Work::LightClientUpdatesByRangeRequest(process_fn)
+            | Work::GossipInclusionList(process_fn) => task_spawner.spawn_blocking(process_fn),
         };
     }
 }
@@ -1717,7 +1731,7 @@ mod tests {
     #[test]
     fn min_queue_len() {
         // State with no validators.
-        let spec = ForkName::latest().make_genesis_spec(ChainSpec::mainnet());
+        let spec = ForkName::latest_stable().make_genesis_spec(ChainSpec::mainnet());
         let genesis_time = 0;
         let state = BeaconState::<MainnetEthSpec>::new(genesis_time, Eth1Data::default(), &spec);
         assert_eq!(state.validators().len(), 0);

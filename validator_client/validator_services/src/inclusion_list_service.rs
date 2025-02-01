@@ -1,19 +1,14 @@
-use crate::duties_service::{DutiesService, DutyAndProof};
+use crate::duties_service::DutiesService;
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use environment::RuntimeContext;
 use eth2::types::InclusionListDutyData;
 use futures::future::join_all;
-use slog::{crit, debug, error, info, trace, warn};
+use slog::{crit, error, info, trace, warn};
 use slot_clock::SlotClock;
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use tokio::time::{sleep, sleep_until, Duration, Instant};
-use tree_hash::TreeHash;
-use types::{
-    Attestation, AttestationData, ChainSpec, CommitteeIndex, EthSpec, InclusionList,
-    SignedInclusionList, Slot,
-};
+use tokio::time::{sleep, Duration};
+use types::{ChainSpec, EthSpec, Slot};
 use validator_store::{Error as ValidatorStoreError, ValidatorStore};
 
 /// Helper to minimise `Arc` usage.
@@ -116,9 +111,13 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
     }
 
     /// Spawn a new task that downloads, signs and uploads the inclusion lists to the beacon node.
-    fn spawn_inclusion_list_task(&self, slot_duration: Duration) -> Result<(), String> {
+    // TODO(focil) I don't think we need `slot_duration` here, unless we need to make some calculation
+    // related to the freeze deadline.
+    fn spawn_inclusion_list_task(&self, _slot_duration: Duration) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
-        let duration_to_next_slot = self
+
+        // TODO(focil) unused variable
+        let _duration_to_next_slot = self
             .slot_clock
             .duration_to_next_slot()
             .ok_or("Unable to determine duration to next slot")?;
@@ -160,7 +159,8 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .now()
             .ok_or("Unable to determine current slot from clock")
             .map(|slot| slot.epoch(E::slots_per_epoch()));
-        let current_epoch = current_epoch.map_err(|e| {
+        // TODO(focil) unused variable
+        let _current_epoch = current_epoch.map_err(|e| {
             crit!(
                 log,
                 "Error during inclusion list routine";
@@ -172,12 +172,12 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         let inclusion_list = self
             .beacon_nodes
             .first_success(|beacon_node| async move {
-                // TODO: add timer metric
+                // TODO(focil) add timer metric
                 beacon_node
                     .get_validator_inclusion_list(slot)
                     .await
                     .map_err(|e| format!("Failed to produce inclusion list: {:?}", e))
-                    .map(|result| result.ok_or(format!("Inclusion list unavailable")))?
+                    .map(|result| result.ok_or("Inclusion list unavailable".to_string()))?
                     .map(|result| result.data)
             })
             .await

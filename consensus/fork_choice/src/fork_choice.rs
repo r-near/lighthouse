@@ -390,6 +390,7 @@ where
             *fc_store.finalized_checkpoint(),
             current_epoch_shuffling_id,
             next_epoch_shuffling_id,
+            *fc_store.unsatisfied_inclusion_list_block(),
             execution_status,
         )?;
 
@@ -626,6 +627,12 @@ where
             .map_err(Error::FailedToProcessInvalidExecutionPayload)
     }
 
+    // TODO(focil) add documentation
+    pub fn on_invalid_inclusion_list_payload(&mut self, block_root: Hash256) {
+        self.fc_store
+            .set_unsatisfied_inclusion_list_block(block_root);
+    }
+
     /// Add `block` to the fork choice DAG.
     ///
     /// - `block_root` is the root of `block.
@@ -755,20 +762,15 @@ where
             if let Some((parent_justified, parent_finalized)) = parent_checkpoints {
                 (parent_justified, parent_finalized)
             } else {
-                let justification_and_finalization_state = match block {
-                    BeaconBlockRef::Electra(_)
-                    | BeaconBlockRef::Deneb(_)
-                    | BeaconBlockRef::Capella(_)
-                    | BeaconBlockRef::Bellatrix(_)
-                    | BeaconBlockRef::Altair(_) => {
+                let justification_and_finalization_state =
+                    if block.fork_name_unchecked().altair_enabled() {
                         // NOTE: Processing justification & finalization requires the progressive
                         // balances cache, but we cannot initialize it here as we only have an
                         // immutable reference. The state *should* have come straight from block
                         // processing, which initialises the cache, but if we add other `on_block`
                         // calls in future it could be worth passing a mutable reference.
                         per_epoch_processing::altair::process_justification_and_finalization(state)?
-                    }
-                    BeaconBlockRef::Base(_) => {
+                    } else {
                         let mut validator_statuses =
                             per_epoch_processing::base::ValidatorStatuses::new(state, spec)
                                 .map_err(Error::ValidatorStatuses)?;
@@ -780,8 +782,7 @@ where
                             &validator_statuses.total_balances,
                             spec,
                         )?
-                    }
-                };
+                    };
 
                 (
                     justification_and_finalization_state.current_justified_checkpoint(),

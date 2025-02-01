@@ -1441,7 +1441,8 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
 
     // Update the duties service with the new `InclusionListDutyData` messages.
     let mut inclusion_list_duties = duties_service.inclusion_list_duties.write();
-    let current_slot = duties_service
+    // TODO(focil) this variable is unused at the moment
+    let _current_slot = duties_service
         .slot_clock
         .now_or_genesis()
         .unwrap_or_default();
@@ -1451,7 +1452,8 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
         match inclusion_list_duty_map.entry(epoch) {
             hash_map::Entry::Occupied(mut occupied) => {
                 let mut_value = occupied.get_mut();
-                let (prior_dependent_root, prior_duty) = &mut_value;
+                // TODO(focil) unused variable
+                let (prior_dependent_root, _prior_duty) = &mut_value;
 
                 // NOTE: We do not need to worry about an overwrite here, since there is no
                 // information that we store aside from the duty itself. There is no selection proof

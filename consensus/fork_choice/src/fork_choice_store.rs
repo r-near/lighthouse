@@ -79,4 +79,10 @@ pub trait ForkChoiceStore<E: EthSpec>: Sized {
 
     /// Adds to the set of equivocating indices.
     fn extend_equivocating_indices(&mut self, indices: impl IntoIterator<Item = u64>);
+
+    /// Returns the `unsatisfied_inclusion_list_block`.
+    fn unsatisfied_inclusion_list_block(&self) -> &Hash256;
+
+    /// Sets the `unsatisfied_inclusion_list_block`.
+    fn set_unsatisfied_inclusion_list_block(&mut self, block_root: Hash256);
 }

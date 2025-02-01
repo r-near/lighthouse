@@ -52,6 +52,7 @@ pub enum NotifyExecutionLayer {
 pub struct PayloadNotifier<T: BeaconChainTypes> {
     pub chain: Arc<BeaconChain<T>>,
     pub block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    pub inclusion_list_transactions: InclusionListTransactions<T::EthSpec>,
     payload_verification_status: Option<PayloadVerificationStatus>,
 }
 
@@ -102,10 +103,17 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
             Some(PayloadVerificationStatus::Irrelevant)
         };
 
+        let inclusion_list_transactions = chain
+            .inclusion_list_cache
+            .read()
+            .get_inclusion_list_transactions(block.slot())
+            .unwrap_or(vec![].into());
+
         Ok(Self {
             chain,
             block,
             payload_verification_status,
+            inclusion_list_transactions,
         })
     }
 
@@ -113,7 +121,12 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
         if let Some(precomputed_status) = self.payload_verification_status {
             Ok(precomputed_status)
         } else {
-            notify_new_payload(&self.chain, self.block.message()).await
+            notify_new_payload(
+                &self.chain,
+                self.block.message(),
+                self.inclusion_list_transactions,
+            )
+            .await
         }
     }
 }
@@ -127,9 +140,10 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
 /// contains a few extra checks by running `partially_verify_execution_payload` first:
 ///
 /// https://github.com/ethereum/consensus-specs/blob/v1.1.9/specs/bellatrix/beacon-chain.md#notify_new_payload
-async fn notify_new_payload<'a, T: BeaconChainTypes>(
+async fn notify_new_payload<T: BeaconChainTypes>(
     chain: &Arc<BeaconChain<T>>,
-    block: BeaconBlockRef<'a, T::EthSpec>,
+    block: BeaconBlockRef<'_, T::EthSpec>,
+    il_transactions: InclusionListTransactions<T::EthSpec>,
 ) -> Result<PayloadVerificationStatus, BlockError> {
     let execution_layer = chain
         .execution_layer
@@ -137,7 +151,12 @@ async fn notify_new_payload<'a, T: BeaconChainTypes>(
         .ok_or(ExecutionPayloadError::NoExecutionConnection)?;
 
     let execution_block_hash = block.execution_payload()?.block_hash();
-    let new_payload_response = execution_layer.notify_new_payload(block.try_into()?).await;
+    let new_payload_response = execution_layer
+        .notify_new_payload(NewPayloadRequest::try_from_block_and_il_transactions(
+            block,
+            il_transactions,
+        )?)
+        .await;
 
     match new_payload_response {
         Ok(status) => match status {
@@ -181,6 +200,15 @@ async fn notify_new_payload<'a, T: BeaconChainTypes>(
                     // This block has not yet been applied to fork choice, so the latest block that was
                     // imported to fork choice was the parent.
                     let latest_root = block.parent_root();
+
+                    // If the payload is invalid because it didn't satisfy the inclusion lit
+                    // transactions for this slot, update the fork choice store before processing
+                    // the invalid EL payload.
+                    if *validation_error == Some("INVALID_INCLUSION_LIST".to_string()) {
+                        chain
+                            .set_unsatisfied_inclusion_list_block(block.tree_hash_root())
+                            .await?;
+                    }
 
                     chain
                         .process_invalid_execution_payload(&InvalidationOperation::InvalidateMany {
@@ -230,9 +258,9 @@ async fn notify_new_payload<'a, T: BeaconChainTypes>(
 /// Equivalent to the `validate_merge_block` function in the merge Fork Choice Changes:
 ///
 /// https://github.com/ethereum/consensus-specs/blob/v1.1.5/specs/merge/fork-choice.md#validate_merge_block
-pub async fn validate_merge_block<'a, T: BeaconChainTypes>(
+pub async fn validate_merge_block<T: BeaconChainTypes>(
     chain: &Arc<BeaconChain<T>>,
-    block: BeaconBlockRef<'a, T::EthSpec>,
+    block: BeaconBlockRef<'_, T::EthSpec>,
     allow_optimistic_import: AllowOptimisticImport,
 ) -> Result<(), BlockError> {
     let spec = &chain.spec;
@@ -374,19 +402,15 @@ pub fn get_execution_payload<T: BeaconChainTypes>(
     let latest_execution_payload_header = state.latest_execution_payload_header()?;
     let latest_execution_payload_header_block_hash = latest_execution_payload_header.block_hash();
     let latest_execution_payload_header_gas_limit = latest_execution_payload_header.gas_limit();
-    let withdrawals = match state {
-        &BeaconState::Capella(_) | &BeaconState::Deneb(_) | &BeaconState::Electra(_) => {
-            Some(get_expected_withdrawals(state, spec)?.0.into())
-        }
-        &BeaconState::Bellatrix(_) => None,
-        // These shouldn't happen but they're here to make the pattern irrefutable
-        &BeaconState::Base(_) | &BeaconState::Altair(_) => None,
+    let withdrawals = if state.fork_name_unchecked().capella_enabled() {
+        Some(get_expected_withdrawals(state, spec)?.0.into())
+    } else {
+        None
     };
-    let parent_beacon_block_root = match state {
-        BeaconState::Deneb(_) | BeaconState::Electra(_) => Some(parent_block_root),
-        BeaconState::Bellatrix(_) | BeaconState::Capella(_) => None,
-        // These shouldn't happen but they're here to make the pattern irrefutable
-        BeaconState::Base(_) | BeaconState::Altair(_) => None,
+    let parent_beacon_block_root = if state.fork_name_unchecked().deneb_enabled() {
+        Some(parent_block_root)
+    } else {
+        None
     };
 
     // Spawn a task to obtain the execution payload from the EL via a series of async calls. The

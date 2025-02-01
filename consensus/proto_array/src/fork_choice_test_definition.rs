@@ -87,6 +87,7 @@ impl ForkChoiceTestDefinition {
             self.finalized_checkpoint,
             junk_shuffling_id.clone(),
             junk_shuffling_id,
+            Hash256::ZERO,
             ExecutionStatus::Optimistic(ExecutionBlockHash::zero()),
         )
         .expect("should create fork choice struct");
