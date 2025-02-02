@@ -19,6 +19,7 @@ pub enum GossipInclusionListError {
     TooManyTransactions,
     InvalidSignature,
     BeaconChainError(BeaconChainError),
+    PriorInclusionListKnown,
     // TODO: equivocation e.g. PriorInclusionListKnown
 }
 

@@ -28,7 +28,7 @@ use types::{
     Attestation, AttestationData, AttesterSlashingRef, BeaconBlockRef, BeaconState,
     BeaconStateError, ChainSpec, Epoch, EthSpec, Hash256, IndexedAttestation,
     IndexedAttestationRef, ProposerSlashing, PublicKeyBytes, SignedAggregateAndProof,
-    SignedContributionAndProof, Slot, SyncCommitteeMessage, VoluntaryExit,
+    SignedContributionAndProof, SignedInclusionList, Slot, SyncCommitteeMessage, VoluntaryExit,
 };
 
 /// Used for Prometheus labels.
@@ -1885,6 +1885,22 @@ impl<E: EthSpec> ValidatorMonitor<E> {
 
                 validator.with_epoch_summary(epoch, |summary| summary.register_attester_slashing());
             })
+    }
+
+    /// Register an inclusion list seen on the HTTP API.
+    pub fn register_api_inclusion_list<S: SlotClock>(
+        &self,
+        _seen_timestamp: Duration,
+        _inclusion_list: &SignedInclusionList<E>,
+        _slot_clock: &S,
+    ) {
+        // TODO(focil) add logic to register IL
+        // self.register_unaggregated_attestation(
+        //     "api",
+        //     seen_timestamp,
+        //     indexed_attestation,
+        //     slot_clock,
+        // )
     }
 
     /// Scrape `self` for metrics.

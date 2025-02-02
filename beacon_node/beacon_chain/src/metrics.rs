@@ -510,6 +510,30 @@ pub static ATTESTATION_PRODUCTION_CACHE_PRIME_SECONDS: LazyLock<Result<Histogram
     });
 
 /*
+ * Inclusion List Verification
+ */
+pub static INCLUSION_LIST_PROCESSING_REQUESTS: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
+    try_create_int_counter(
+        "beacon_inclusion_list_processing_requests_total",
+        "Count of all inclusion lists submitted for processing",
+    )
+});
+pub static INCLUSION_LIST_GOSSIP_VERIFICATION_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "beacon_inclusion_list_gossip_verification_seconds",
+            "Full runtime of inclusion list gossip verification",
+        )
+    });
+pub static INCLUSION_LIST_PROCESSING_SUCCESSES: LazyLock<Result<IntCounter>> =
+    LazyLock::new(|| {
+        try_create_int_counter(
+            "beacon_inclusion_list_processing_successes_total",
+            "Number of inclusion lists verified for gossip",
+        )
+    });
+
+/*
  * Fork Choice
  */
 pub static FORK_CHOICE_REQUESTS: LazyLock<Result<IntCounter>> = LazyLock::new(|| {

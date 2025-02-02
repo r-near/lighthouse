@@ -34,6 +34,8 @@ use crate::execution_payload::{get_execution_payload, NotifyExecutionLayer, Prep
 use crate::fork_choice_signal::{ForkChoiceSignalRx, ForkChoiceSignalTx, ForkChoiceWaitResult};
 use crate::graffiti_calculator::GraffitiCalculator;
 use crate::head_tracker::{HeadTracker, HeadTrackerReader, SszHeadTracker};
+use crate::inclusion_list_verification::GossipInclusionListError;
+use crate::inclusion_list_verification::GossipVerifiedInclusionList;
 use crate::kzg_utils::reconstruct_blobs;
 use crate::light_client_finality_update_verification::{
     Error as LightClientFinalityUpdateError, VerifiedLightClientFinalityUpdate,
@@ -2368,6 +2370,26 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         )
         .inspect(|_| {
             metrics::inc_counter(&metrics::OPTIMISTIC_UPDATE_PROCESSING_SUCCESSES);
+        })
+    }
+
+    /// Accepts some `Attestation` from the network and attempts to verify it, returning `Ok(_)` if
+    /// it is valid to be (re)broadcast on the gossip network.
+    ///
+    /// The attestation must be "unaggregated", that is it must have exactly one
+    /// aggregation bit set.
+    pub fn verify_inclusion_list_for_gossip(
+        &self,
+        inclusion_list: &SignedInclusionList<T::EthSpec>,
+    ) -> Result<GossipVerifiedInclusionList<T>, GossipInclusionListError> {
+        metrics::inc_counter(&metrics::INCLUSION_LIST_PROCESSING_REQUESTS);
+        let _timer =
+            metrics::start_timer(&metrics::UNAGGREGATED_ATTESTATION_GOSSIP_VERIFICATION_TIMES);
+
+        GossipVerifiedInclusionList::verify(inclusion_list, self).inspect(|_v| {
+            // TODO(focil) emit event
+            if let Some(_event_handler) = self.event_handler.as_ref() {}
+            metrics::inc_counter(&metrics::INCLUSION_LIST_PROCESSING_SUCCESSES);
         })
     }
 

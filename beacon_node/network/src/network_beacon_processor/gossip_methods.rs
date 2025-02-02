@@ -2185,7 +2185,8 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                 | GossipInclusionListError::PastSlot { .. }
                 | GossipInclusionListError::ValidatorNotInCommittee
                 | GossipInclusionListError::TooManyTransactions
-                | GossipInclusionListError::InvalidSignature => {
+                | GossipInclusionListError::InvalidSignature
+                | GossipInclusionListError::PriorInclusionListKnown => {
                     debug!(self.log, "Could not verify inclusion list for gossip. Rejecting the inclusion list"; "error" => ?err);
                 }
                 GossipInclusionListError::InvalidCommitteeRoot => {

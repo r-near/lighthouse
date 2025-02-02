@@ -20,6 +20,7 @@ mod produce_block;
 mod proposer_duties;
 mod publish_attestations;
 mod publish_blocks;
+mod publish_inclusion_lists;
 mod standard_block_rewards;
 mod state_id;
 mod sync_committee_rewards;
@@ -2318,30 +2319,33 @@ pub fn serve<T: BeaconChainTypes>(
         );
 
     // POST beacon/pool/inclusion_lists
-    // TODO(focil) unused endpoint and variables
-    let _post_beacon_pool_inclusion_lists = beacon_pool_path
+    let post_beacon_pool_inclusion_lists = beacon_pool_path
         .clone()
         .and(warp::path("inclusion_lists"))
         .and(warp::path::end())
         .and(warp_utils::json::json())
         .and(network_tx_filter.clone())
+        .and(reprocess_send_filter.clone())
         .and(log_filter.clone())
         .then(
             |task_spawner: TaskSpawner<T::EthSpec>,
-             _chain: Arc<BeaconChain<T>>,
+             chain: Arc<BeaconChain<T>>,
              inclusion_lists: Vec<SignedInclusionList<T::EthSpec>>,
-             _network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
-             log: Logger| {
-                task_spawner.blocking_json_task(Priority::P0, move || {
-                    // TODO(focil): actually gossip the inclusion lists
-                    info!(
-                        log,
-                        "Posting signed inclusion lists for gossip";
-                        "num_inclusion_lists" => inclusion_lists.len(),
-                    );
+             network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
+             reprocess_tx: Option<Sender<ReprocessQueueMessage>>,
+             log: Logger| async move {
+                let result = crate::publish_inclusion_lists::publish_inclusion_lists(
+                    task_spawner,
+                    chain,
+                    inclusion_lists,
+                    network_tx,
+                    reprocess_tx,
+                    log,
+                )
+                .await
+                .map(|()| warp::reply::json(&()));
 
-                    Ok(())
-                })
+                convert_rejection(result).await
             },
         );
 
@@ -4913,6 +4917,7 @@ pub fn serve<T: BeaconChainTypes>(
                     .uor(post_lighthouse_block_rewards)
                     .uor(post_lighthouse_ui_validator_metrics)
                     .uor(post_lighthouse_ui_validator_info)
+                    .uor(post_beacon_pool_inclusion_lists)
                     .recover(warp_utils::reject::handle_rejection),
             ),
         )
