@@ -3138,7 +3138,6 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         // stored (see `STATE_UPPER_LIMIT_NO_RETAIN`). Make an exception for the genesis state
         // which always needs to be copied from the hot DB to the freezer and should not be deleted.
         if slot != 0 && slot < anchor_info.state_upper_limit {
-            debug!(store.log, "Pruning finalized state"; "slot" => slot);
             continue;
         }
 
@@ -3147,11 +3146,15 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         // Only store the cold state if it's on a diff boundary.
         // Calling `store_cold_state_summary` instead of `store_cold_state` for those allows us
         // to skip loading many hot states.
-        if matches!(
-            store.hierarchy.storage_strategy(slot)?,
-            StorageStrategy::ReplayFrom(..)
-        ) {
+        if let StorageStrategy::ReplayFrom(from) = store.hierarchy.storage_strategy(slot)? {
             // Store slot -> state_root and state_root -> slot mappings.
+            debug!(
+                store.log,
+                "Storing cold state";
+                "strategy" => "replay",
+                "from_slot" => from,
+                "slot" => slot,
+            );
             store.store_cold_state_summary(&state_root, slot, &mut cold_db_ops)?;
         } else {
             let state: BeaconState<E> = store
