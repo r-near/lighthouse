@@ -546,6 +546,17 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             )
         };
 
+        // To debug faulty trees log unexpected that have more than one root. These trees may not
+        // result in an error, as may not be queried in the codepaths below.
+        let state_summaries_dag_roots = state_summaries_dag.tree_roots();
+        if state_summaries_dag_roots.len() > 1 {
+            warn!(
+                log,
+                "Prune state summaries dag found more than one root";
+                "state_summaries_dag_roots" => ?state_summaries_dag_roots
+            );
+        }
+
         // From the DAG compute the list of roots that descend from finalized root up to the
         // split slot.
 

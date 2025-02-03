@@ -139,6 +139,22 @@ impl StateSummariesDAG {
         Ok(Self::new(state_summaries))
     }
 
+    /// Returns a vec of state summaries that have an unknown parent when forming the DAG tree
+    pub fn tree_roots(&self) -> Vec<(Hash256, DAGStateSummary)> {
+        self.state_summaries_by_block_root
+            .values()
+            .flat_map(|summaries| {
+                summaries.values().filter_map(|(state_root, summary)| {
+                    if summary.previous_state_root == Hash256::ZERO {
+                        Some((*state_root, *summary))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     pub fn summaries_count(&self) -> usize {
         self.state_summaries_by_block_root
             .values()
