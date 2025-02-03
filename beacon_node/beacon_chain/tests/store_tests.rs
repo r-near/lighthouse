@@ -2763,8 +2763,8 @@ async fn finalizes_after_resuming_from_db() {
 
     harness
         .chain
-        .persist_head_and_fork_choice()
-        .expect("should persist the head and fork choice");
+        .persist_fork_choice()
+        .expect("should persist fork choice");
     harness
         .chain
         .persist_op_pool()

@@ -610,33 +610,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         })
     }
 
-    /// Persists the head tracker and fork choice.
+    /// Return a database operation for writing the `PersistedBeaconChain` to disk.
     ///
-    /// We do it atomically even though no guarantees need to be made about blocks from
-    /// the head tracker also being present in fork choice.
-    pub fn persist_head_and_fork_choice(&self) -> Result<(), Error> {
-        let mut batch = vec![];
-
-        let _fork_choice_timer = metrics::start_timer(&metrics::PERSIST_FORK_CHOICE);
-        batch.push(self.persist_fork_choice_in_batch());
-
-        self.store.hot_db.do_atomically(batch)?;
-
-        Ok(())
-    }
-
-    /// Return a `PersistedBeaconChain` without reference to a `BeaconChain`.
-    pub fn make_persisted_head(genesis_block_root: Hash256) -> PersistedBeaconChain {
-        PersistedBeaconChain { genesis_block_root }
-    }
-
-    /// Return a database operation for writing the beacon chain head to disk.
-    pub fn persist_head_in_batch(&self) -> KeyValueStoreOp {
-        Self::persist_head_in_batch_standalone(self.genesis_block_root)
-    }
-
+    /// These days the `PersistedBeaconChain` is only used to store the genesis block root, so it
+    /// should only ever be written once at startup. It used to be written more frequently, but
+    /// this is no longer necessary.
     pub fn persist_head_in_batch_standalone(genesis_block_root: Hash256) -> KeyValueStoreOp {
-        Self::make_persisted_head(genesis_block_root).as_kv_store_op(BEACON_CHAIN_DB_KEY)
+        PersistedBeaconChain { genesis_block_root }.as_kv_store_op(BEACON_CHAIN_DB_KEY)
     }
 
     /// Load fork choice from disk, returning `None` if it isn't found.
@@ -7261,7 +7241,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 impl<T: BeaconChainTypes> Drop for BeaconChain<T> {
     fn drop(&mut self) {
         let drop = || -> Result<(), Error> {
-            self.persist_head_and_fork_choice()?;
+            self.persist_fork_choice()?;
             self.persist_op_pool()?;
             self.persist_eth1_cache()
         };
