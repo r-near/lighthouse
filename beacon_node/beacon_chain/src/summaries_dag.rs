@@ -370,6 +370,13 @@ mod tests {
         StateSummariesDAG::new_from_v22(vec![]).unwrap();
     }
 
+    fn assert_previous_state_root_is_zero(dag: &StateSummariesDAG, root: Hash256) {
+        assert!(matches!(
+            dag.previous_state_root(root).unwrap_err(),
+            Error::RootUnknownPreviousStateRoot(..)
+        ));
+    }
+
     #[test]
     fn new_from_v22_one_state() {
         let root_a = root(0xa);
@@ -385,7 +392,7 @@ mod tests {
         let dag = StateSummariesDAG::new_from_v22(vec![(root_a, summary_1)]).unwrap();
 
         // The parent of the root summary is ZERO
-        assert_eq!(dag.previous_state_root(root_a).unwrap(), Hash256::ZERO);
+        assert_previous_state_root_is_zero(&dag, root_a);
     }
 
     #[test]
@@ -444,7 +451,7 @@ mod tests {
         .unwrap();
 
         // The parent of the root summary is ZERO
-        assert_eq!(dag.previous_state_root(root(0xa)).unwrap(), Hash256::ZERO);
+        assert_previous_state_root_is_zero(&dag, root(0xa));
         assert_eq!(dag.previous_state_root(root(0xc)).unwrap(), root(0xb));
         assert_eq!(dag.previous_state_root(root(0xd)).unwrap(), root(0xb));
         assert_eq!(dag.previous_state_root(root(0xe)).unwrap(), root(0xd));
