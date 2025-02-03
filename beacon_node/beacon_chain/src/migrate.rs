@@ -1,11 +1,8 @@
 use crate::errors::BeaconChainError;
-use crate::summaries_dag::{
-    BlockSummariesDAG, DAGBlockSummary, DAGStateSummaryV22, Error as SummariesDagError,
-    StateSummariesDAG,
-};
+use crate::summaries_dag::{DAGStateSummaryV22, Error as SummariesDagError, StateSummariesDAG};
 use parking_lot::Mutex;
 use slog::{debug, error, info, warn, Logger};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::mem;
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -488,7 +485,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "new_finalized_state_hash" => ?new_finalized_state_hash,
         );
 
-        let (state_summaries_dag, block_summaries_dag) = {
+        let state_summaries_dag = {
             let state_summaries = store
                 .load_hot_state_summaries()?
                 .into_iter()
@@ -526,25 +523,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 ));
             }
 
-            // Collect and de-duplicate block summaries from state summaries
-            let unique_blocks = HashMap::<Hash256, DAGBlockSummary>::from_iter(
-                state_summaries.iter().map(|(_, summary)| {
-                    (
-                        summary.latest_block_root,
-                        DAGBlockSummary {
-                            slot: summary.block_slot,
-                            parent_root: summary.block_parent_root,
-                        },
-                    )
-                }),
-            );
-            let blocks = unique_blocks.into_iter().collect::<Vec<_>>();
-
-            (
-                StateSummariesDAG::new_from_v22(state_summaries)
-                    .map_err(|e| PruningError::SummariesDagError("creating StateSumariesDAG", e))?,
-                BlockSummariesDAG::new(&blocks),
-            )
+            StateSummariesDAG::new_from_v22(state_summaries)
+                .map_err(|e| PruningError::SummariesDagError("creating StateSumariesDAG", e))?
         };
 
         // To debug faulty trees log unexpected that have more than one root. These trees may not
@@ -577,21 +557,18 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // block as `new_finalized_state_hash` always has a latest block root the finalized block.
         let finalized_and_descendant_block_roots_of_finalized_checkpoint =
             HashSet::<Hash256>::from_iter(
-                finalized_and_descendant_state_roots_of_finalized_checkpoint
-                    .iter()
-                    .map(|state_root| {
-                        // `.get()` should never error, we just constructed
-                        // finalized_and_descendant_state_roots_of_finalized_checkpoint from the
-                        // state_summaries_dag
-                        let summary = state_summaries_dag.get(state_root).ok_or(
-                            PruningError::SummariesDagError(
-                                "state summaries get summary",
-                                SummariesDagError::MissingStateSummary(*state_root),
-                            ),
-                        )?;
-                        Ok(summary.latest_block_root)
-                    })
-                    .collect::<Result<Vec<_>, PruningError>>()?,
+                state_summaries_dag
+                    .blocks_of_states(
+                        finalized_and_descendant_state_roots_of_finalized_checkpoint.iter(),
+                    )
+                    // should never error, we just constructed
+                    // finalized_and_descendant_state_roots_of_finalized_checkpoint from the
+                    // state_summaries_dag
+                    .map_err(|e| {
+                        PruningError::SummariesDagError("state summaries blocks of descendant", e)
+                    })?
+                    .into_iter()
+                    .map(|(block_root, _)| block_root),
             );
 
         // Note: ancestors_of includes the finalized state root
@@ -609,18 +586,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             .ok_or(PruningError::EmptyFinalizedStates)?;
 
         // Note: ancestors_of includes the finalized block
-        let newly_finalized_blocks = block_summaries_dag
-            .ancestors_of(new_finalized_checkpoint.root)
-            .map_err(|e| PruningError::SummariesDagError("block summaries ancestors_of", e))?;
-        let newly_finalized_block_roots = newly_finalized_blocks
-            .iter()
-            .map(|(root, _)| *root)
-            .collect::<HashSet<Hash256>>();
-        let newly_finalized_blocks_min_slot = *newly_finalized_blocks
-            .iter()
-            .map(|(_, slot)| slot)
-            .min()
-            .ok_or(PruningError::EmptyFinalizedBlocks)?;
+        let newly_finalized_blocks = state_summaries_dag
+            .blocks_of_states(newly_finalized_state_roots.iter())
+            .map_err(|e| {
+                PruningError::SummariesDagError("state summaries blocks of newly finalized", e)
+            })?;
 
         // We don't know which blocks are shared among abandoned chains, so we buffer and delete
         // everything in one fell swoop.
@@ -659,7 +629,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
         }
 
-        for (block_root, slot) in block_summaries_dag.iter() {
+        for block in state_summaries_dag.iter_blocks() {
+            let (block_root, slot) = block;
+
             // Blocks both finalized and unfinalized are in the same DB column. We must only
             // prune blocks from abandoned forks. Note that block pruning and state pruning differ.
             // The blocks DB column is shared for hot and cold data, while the states have different
@@ -671,12 +643,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 // Note that we anchor this set on the finalied checkpoint instead of the finalized
                 // block. A diagram above shows a relevant example.
                 false
-            } else if newly_finalized_block_roots.contains(&block_root) {
+            } else if newly_finalized_blocks.contains(&block) {
                 // Keep recently finalized blocks
                 false
-            } else if slot < newly_finalized_blocks_min_slot
-                || newly_finalized_block_roots.contains(&block_root)
-            {
+            } else if slot < newly_finalized_states_min_slot {
                 // Keep recently finalized blocks that we know are canonical. Blocks with slots <
                 // that `newly_finalized_blocks_min_slot` we don't have canonical information so we
                 // assume they are part of the finalized pruned chain
@@ -703,7 +673,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "Extra pruning information";
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
             "newly_finalized_blocks" => newly_finalized_blocks.len(),
-            "newly_finalized_blocks_min_slot" => newly_finalized_blocks_min_slot,
             "newly_finalized_state_roots" => newly_finalized_state_roots.len(),
             "newly_finalized_states_min_slot" => newly_finalized_states_min_slot,
             "state_summaries_count" => state_summaries_dag.summaries_count(),
@@ -752,7 +721,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         Ok(PruningOutcome::Successful {
             // TODO(hdiff): approximation of the previous finalized checkpoint. Only used in the
             // compaction to compute time, can we use something else?
-            old_finalized_checkpoint_epoch: newly_finalized_blocks_min_slot
+            old_finalized_checkpoint_epoch: newly_finalized_states_min_slot
                 .epoch(E::slots_per_epoch()),
         })
     }

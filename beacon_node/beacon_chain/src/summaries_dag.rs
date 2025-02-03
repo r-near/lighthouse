@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
@@ -8,6 +9,7 @@ use types::{Hash256, Slot};
 pub struct DAGStateSummary {
     pub slot: Slot,
     pub latest_block_root: Hash256,
+    pub latest_block_slot: Slot,
     pub previous_state_root: Hash256,
 }
 
@@ -144,6 +146,7 @@ impl StateSummariesDAG {
                     DAGStateSummary {
                         slot: summary.slot,
                         latest_block_root: summary.latest_block_root,
+                        latest_block_slot: summary.block_slot,
                         previous_state_root,
                     },
                 ))
@@ -153,8 +156,28 @@ impl StateSummariesDAG {
         Ok(Self::new(state_summaries))
     }
 
-    pub fn get(&self, state_root: &Hash256) -> Option<&DAGStateSummary> {
-        self.state_summaries_by_state_root.get(state_root)
+    // Returns all non-unique latest block roots of a given set of states
+    pub fn blocks_of_states<'a, I: Iterator<Item = &'a Hash256>>(
+        &self,
+        state_roots: I,
+    ) -> Result<Vec<(Hash256, Slot)>, Error> {
+        state_roots
+            .map(|state_root| {
+                let summary = self
+                    .state_summaries_by_state_root
+                    .get(state_root)
+                    .ok_or(Error::MissingStateSummary(*state_root))?;
+                Ok((summary.latest_block_root, summary.latest_block_slot))
+            })
+            .collect()
+    }
+
+    // Returns all unique latest blocks of this DAG's summaries
+    pub fn iter_blocks(&self) -> impl Iterator<Item = (Hash256, Slot)> + '_ {
+        self.state_summaries_by_state_root
+            .values()
+            .map(|summary| (summary.latest_block_root, summary.latest_block_slot))
+            .unique()
     }
 
     /// Returns a vec of state summaries that have an unknown parent when forming the DAG tree
@@ -272,97 +295,14 @@ impl StateSummariesDAG {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct DAGBlockSummary {
-    pub slot: Slot,
-    pub parent_root: Hash256,
-}
-
-pub struct BlockSummariesDAG {
-    // block_root -> block
-    blocks_by_block_root: HashMap<Hash256, DAGBlockSummary>,
-    // parent_block_root -> Vec<children_block_root>
-    // cached value to prevent having to recompute in each recursive call into `descendants_of`
-    child_block_roots: HashMap<Hash256, Vec<Hash256>>,
-}
-
-impl BlockSummariesDAG {
-    pub fn new(blocks: &[(Hash256, DAGBlockSummary)]) -> Self {
-        // Construct block root to parent block root mapping.
-        let mut child_block_roots = HashMap::<_, Vec<_>>::new();
-        let mut blocks_by_block_root = HashMap::new();
-
-        for (block_root, block) in blocks {
-            child_block_roots
-                .entry(block.parent_root)
-                .or_default()
-                .push(*block_root);
-            // Add empty entry for the child block
-            child_block_roots.entry(*block_root).or_default();
-
-            blocks_by_block_root.insert(*block_root, *block);
-        }
-
-        Self {
-            child_block_roots,
-            blocks_by_block_root,
-        }
-    }
-
-    pub fn descendant_block_roots_of(&self, block_root: &Hash256) -> Result<Vec<Hash256>, Error> {
-        let mut descendants = vec![];
-        for child_root in self
-            .child_block_roots
-            .get(block_root)
-            .ok_or(Error::MissingChildBlockRoot(*block_root))?
-        {
-            descendants.push(*child_root);
-            descendants.extend(self.descendant_block_roots_of(child_root)?);
-        }
-        Ok(descendants)
-    }
-
-    /// Returns all ancestors of `block_root` INCLUDING `block_root` until the next parent is not
-    /// known.
-    pub fn ancestors_of(&self, mut block_root: Hash256) -> Result<Vec<(Hash256, Slot)>, Error> {
-        // Sanity check that the first block exists
-        if !self.blocks_by_block_root.contains_key(&block_root) {
-            return Err(Error::MissingBlock(block_root));
-        }
-
-        let mut ancestors = vec![];
-        loop {
-            if let Some(block) = self.blocks_by_block_root.get(&block_root) {
-                ancestors.push((block_root, block.slot));
-                block_root = block.parent_root
-            } else {
-                return Ok(ancestors);
-            }
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (Hash256, Slot)> + '_ {
-        self.blocks_by_block_root
-            .iter()
-            .map(|(block_root, block)| (*block_root, block.slot))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{BlockSummariesDAG, DAGBlockSummary, DAGStateSummaryV22, Error, StateSummariesDAG};
+    use super::{DAGStateSummaryV22, Error, StateSummariesDAG};
     use bls::FixedBytesExtended;
     use types::{Hash256, Slot};
 
     fn root(n: u64) -> Hash256 {
         Hash256::from_low_u64_le(n)
-    }
-
-    fn block_with_parent(parent_root: Hash256) -> DAGBlockSummary {
-        DAGBlockSummary {
-            slot: Slot::new(0),
-            parent_root,
-        }
     }
 
     #[test]
@@ -455,34 +395,5 @@ mod tests {
         assert_eq!(dag.previous_state_root(root(0xc)).unwrap(), root(0xb));
         assert_eq!(dag.previous_state_root(root(0xd)).unwrap(), root(0xb));
         assert_eq!(dag.previous_state_root(root(0xe)).unwrap(), root(0xd));
-    }
-
-    #[test]
-    fn descendant_block_roots_of() {
-        let root_1 = root(1);
-        let root_2 = root(2);
-        let root_3 = root(3);
-        let parents = vec![(root_1, block_with_parent(root_2))];
-        let dag = BlockSummariesDAG::new(&parents);
-
-        // root 1 is known and has no childs
-        assert_eq!(
-            dag.descendant_block_roots_of(&root_1).unwrap(),
-            Vec::<Hash256>::new()
-        );
-        // root 2 is known and has childs
-        assert_eq!(
-            dag.descendant_block_roots_of(&root_2).unwrap(),
-            vec![root_1]
-        );
-        // root 3 is not known
-        {
-            let err = dag.descendant_block_roots_of(&root_3).unwrap_err();
-            if let Error::MissingChildBlockRoot(_) = err {
-                // ok
-            } else {
-                panic!("unexpected err {err:?}");
-            }
-        }
     }
 }
