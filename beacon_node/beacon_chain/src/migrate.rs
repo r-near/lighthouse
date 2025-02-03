@@ -690,6 +690,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
         }
 
+        // Sort states to prune to make it more readable
+        let mut states_to_prune = states_to_prune.into_iter().collect::<Vec<_>>();
+        states_to_prune.sort_by_key(|(slot, _)| *slot);
+
         debug!(
             log,
             "Extra pruning information";
@@ -702,11 +706,17 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "state_summaries_dag_roots" => ?state_summaries_dag_roots,
             "finalized_and_descendant_state_roots_of_finalized_checkpoint" => finalized_and_descendant_state_roots_of_finalized_checkpoint.len(),
             "finalized_and_descendant_state_roots_of_finalized_checkpoint" => finalized_and_descendant_state_roots_of_finalized_checkpoint.len(),
-            "blocks_to_prune_count" => blocks_to_prune.len(),
-            "states_to_prune_count" => states_to_prune.len(),
-            "blocks_to_prune" => ?blocks_to_prune,
-            "states_to_prune" => ?states_to_prune,
+            "blocks_to_prune" => blocks_to_prune.len(),
+            "states_to_prune" => states_to_prune.len(),
         );
+        // Don't log the full `states_to_prune` in the log statement above as it can result in a
+        // single log line of +1Kb and break logging setups.
+        for block_root in &blocks_to_prune {
+            debug!(log, "block to prune"; "block_root" => ?block_root);
+        }
+        for (slot, state_root) in &states_to_prune {
+            debug!(log, "state to prune"; "state_root" => ?state_root, "slot" => slot);
+        }
 
         let mut batch: Vec<StoreOp<E>> = blocks_to_prune
             .into_iter()
