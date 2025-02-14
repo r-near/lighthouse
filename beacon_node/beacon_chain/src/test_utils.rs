@@ -926,10 +926,10 @@ where
             let fork_choice = self.chain.canonical_head.fork_choice_read_lock();
             if heads.is_empty() {
                 let nodes = &fork_choice.proto_array().core_proto_array().nodes;
-                panic!("Expected to known head block root {head_block_root:?}, but heads is empty. Nodes: {nodes:#?}");
+                panic!("Expected to know head block root {head_block_root:?}, but heads is empty. Nodes: {nodes:#?}");
             } else {
                 panic!(
-                    "Expected to known head block root {head_block_root:?}, known heads {heads:#?}"
+                    "Expected to know head block root {head_block_root:?}, known heads {heads:#?}"
                 );
             }
         }

@@ -454,7 +454,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
     /// space.
     fn prune_hot_db(
         store: Arc<HotColdDB<E, Hot, Cold>>,
-        new_finalized_state_hash: Hash256,
+        new_finalized_state_root: Hash256,
         new_finalized_state: &BeaconState<E>,
         new_finalized_checkpoint: Checkpoint,
         log: &Logger,
@@ -482,7 +482,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             log,
             "Starting database pruning";
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
-            "new_finalized_state_hash" => ?new_finalized_state_hash,
+            "new_finalized_state_root" => ?new_finalized_state_root,
         );
 
         let state_summaries_dag = {
@@ -527,8 +527,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 .map_err(|e| PruningError::SummariesDagError("creating StateSumariesDAG", e))?
         };
 
-        // To debug faulty trees log unexpected that have more than one root. These trees may not
-        // result in an error, as may not be queried in the codepaths below.
+        // To debug faulty trees log if we unexpectedly have more than one root. These trees may not
+        // result in an error, as they may not be queried in the codepaths below.
         let state_summaries_dag_roots = state_summaries_dag.tree_roots();
         if state_summaries_dag_roots.len() > 1 {
             warn!(
@@ -538,14 +538,14 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             );
         }
 
-        // `new_finalized_state_hash` is the *state at the slot of the finalized epoch*,
+        // `new_finalized_state_root` is the *state at the slot of the finalized epoch*,
         // rather than the state of the latest finalized block. These two values will only
         // differ when the first slot of the finalized epoch is a skip slot.
         let finalized_and_descendant_state_roots_of_finalized_checkpoint =
             HashSet::<Hash256>::from_iter(
-                std::iter::once(new_finalized_state_hash).chain(
+                std::iter::once(new_finalized_state_root).chain(
                     state_summaries_dag
-                        .descendants_of(&new_finalized_state_hash)
+                        .descendants_of(&new_finalized_state_root)
                         .map_err(|e| {
                             PruningError::SummariesDagError("state summaries descendants_of", e)
                         })?,
@@ -554,7 +554,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
         // Collect all `latest_block_roots` of the
         // finalized_and_descendant_state_roots_of_finalized_checkpoint set. Includes the finalized
-        // block as `new_finalized_state_hash` always has a latest block root the finalized block.
+        // block as `new_finalized_state_root` always has a latest block root equal to the finalized
+        // block.
         let finalized_and_descendant_block_roots_of_finalized_checkpoint =
             HashSet::<Hash256>::from_iter(
                 state_summaries_dag
@@ -573,7 +574,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
         // Note: ancestors_of includes the finalized state root
         let newly_finalized_state_summaries = state_summaries_dag
-            .ancestors_of(new_finalized_state_hash)
+            .ancestors_of(new_finalized_state_root)
             .map_err(|e| PruningError::SummariesDagError("state summaries ancestors_of", e))?;
         let newly_finalized_state_roots = newly_finalized_state_summaries
             .iter()
@@ -629,9 +630,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
         }
 
-        for block in state_summaries_dag.iter_blocks() {
-            let (block_root, slot) = block;
-
+        for (block_root, slot) in state_summaries_dag.iter_blocks() {
             // Blocks both finalized and unfinalized are in the same DB column. We must only
             // prune blocks from abandoned forks. Note that block pruning and state pruning differ.
             // The blocks DB column is shared for hot and cold data, while the states have different
@@ -639,11 +638,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             let should_prune = if finalized_and_descendant_block_roots_of_finalized_checkpoint
                 .contains(&block_root)
             {
-                // Keep unfinalized blocks descendant of finalized checkpoint + finalized block itself
-                // Note that we anchor this set on the finalied checkpoint instead of the finalized
-                // block. A diagram above shows a relevant example.
+                // Keep unfinalized blocks descendant of finalized checkpoint + finalized block
+                // itself Note that we anchor this set on the finalized checkpoint instead of the
+                // finalized block. A diagram above shows a relevant example.
                 false
-            } else if newly_finalized_blocks.contains(&block) {
+            } else if newly_finalized_blocks.contains(&(block_root, slot)) {
                 // Keep recently finalized blocks
                 false
             } else if slot < newly_finalized_states_min_slot {
@@ -651,8 +650,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 // that `newly_finalized_blocks_min_slot` we don't have canonical information so we
                 // assume they are part of the finalized pruned chain
                 //
-                // Pruning those risks breaking the DB by deleting canonical blocks once the HDiff
-                // grid advances. If the pruning routine is correct this condition should never hit.
+                // Pruning these would risk breaking the DB by deleting canonical blocks once the
+                // HDiff grid advances. If the pruning routine is correct this condition should
+                // never be hit.
                 false
             } else {
                 // Everything else, prune
@@ -685,10 +685,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // Don't log the full `states_to_prune` in the log statement above as it can result in a
         // single log line of +1Kb and break logging setups.
         for block_root in &blocks_to_prune {
-            debug!(log, "block to prune"; "block_root" => ?block_root);
+            debug!(log, "Pruning block"; "block_root" => ?block_root);
         }
         for (slot, state_root) in &states_to_prune {
-            debug!(log, "state to prune"; "state_root" => ?state_root, "slot" => slot);
+            debug!(log, "Pruning state"; "state_root" => ?state_root, "slot" => slot);
         }
 
         let mut batch: Vec<StoreOp<E>> = blocks_to_prune
@@ -709,6 +709,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
         // Prune sync committee branches of non-checkpoint canonical finalized blocks
         Self::prune_non_checkpoint_sync_committee_branches(&newly_finalized_blocks, &mut batch);
+
         // Prune all payloads of the canonical finalized blocks
         if store.get_config().prune_payloads {
             Self::prune_finalized_payloads(&newly_finalized_blocks, &mut batch);
