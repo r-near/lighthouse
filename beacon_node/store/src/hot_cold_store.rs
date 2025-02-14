@@ -3082,7 +3082,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     }
 }
 
-/// Advance the split point of the store, moving new finalized states to the freezer.
+/// Advance the split point of the store, copying new finalized states to the freezer.
+///
+/// This function previously did a combination of freezer migration alongside pruning. Now it is
+/// *just* responsible for copying relevant data to the freezer, while pruning is implemented
+/// in `prune_hot_db`.
 pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     store: Arc<HotColdDB<E, Hot, Cold>>,
     finalized_state_root: Hash256,
@@ -3118,12 +3122,11 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     let mut cold_db_block_ops = vec![];
 
     // Iterate in descending order until the current split slot
-    let state_roots = RootsIterator::new(&store, finalized_state)
-        .take_while(|result| match result {
-            Ok((_, _, slot)) => *slot >= current_split_slot,
-            Err(_) => true,
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let state_roots: Vec<_> =
+        process_results(RootsIterator::new(&store, finalized_state), |iter| {
+            iter.take_while(|(_, _, slot)| *slot >= current_split_slot)
+                .collect()
+        })?;
 
     // Then, iterate states in slot ascending order, as they are stored wrt previous states.
     for (block_root, state_root, slot) in state_roots.into_iter().rev() {
@@ -3141,7 +3144,7 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
             continue;
         }
 
-        let mut cold_db_ops = vec![];
+        let mut cold_db_state_ops = vec![];
 
         // Only store the cold state if it's on a diff boundary.
         // Calling `store_cold_state_summary` instead of `store_cold_state` for those allows us
@@ -3155,29 +3158,28 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
                 "from_slot" => from,
                 "slot" => slot,
             );
-            store.store_cold_state_summary(&state_root, slot, &mut cold_db_ops)?;
+            store.store_cold_state_summary(&state_root, slot, &mut cold_db_state_ops)?;
         } else {
             let state: BeaconState<E> = store
                 .get_hot_state(&state_root)?
                 .ok_or(HotColdDBError::MissingStateToFreeze(state_root))?;
 
-            store.store_cold_state(&state_root, &state, &mut cold_db_ops)?;
+            store.store_cold_state(&state_root, &state, &mut cold_db_state_ops)?;
         }
 
         // Cold states are diffed with respect to each other, so we need to finish writing previous
         // states before storing new ones.
-        store.cold_db.do_atomically(cold_db_ops)?;
+        store.cold_db.do_atomically(cold_db_state_ops)?;
     }
 
-    // Warning: Critical section.  We have to take care not to put any of the two databases in an
+    // Warning: Critical section. We have to take care not to put any of the two databases in an
     //          inconsistent state if the OS process dies at any point during the freezing
     //          procedure.
     //
     // Since it is pretty much impossible to be atomic across more than one database, we trade
-    // losing track of states to delete, for consistency.  In other words: We should be safe to die
-    // at any point below but it may happen that some states won't be deleted from the hot database
-    // and will remain there forever.  Since dying in these particular few lines should be an
-    // exceedingly rare event, this should be an acceptable tradeoff.
+    // potentially re-doing the migration to copy data to the freezer, for consistency. If we crash
+    // after writing all new block & state data to the freezer but before updating the split, then
+    // in the worst case we will restart with the old split and re-run the migration.
     store.cold_db.do_atomically(cold_db_block_ops)?;
     store.cold_db.sync()?;
     {
@@ -3189,7 +3191,7 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         if latest_split_slot != current_split_slot {
             error!(
                 store.log,
-                "Race condition detected: Split point changed while moving states to the freezer";
+                "Race condition detected: Split point changed while copying states to the freezer";
                 "previous split slot" => current_split_slot,
                 "current split slot" => latest_split_slot,
             );
