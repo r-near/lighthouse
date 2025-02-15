@@ -1,8 +1,8 @@
 use proto_array::JustifiedBalances;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use types::{AbstractExecPayload, BeaconBlockRef, BeaconState, Checkpoint, EthSpec, Hash256, Slot};
-
 /// Approximates the `Store` in "Ethereum 2.0 Phase 0 -- Beacon Chain Fork Choice":
 ///
 /// https://github.com/ethereum/eth2.0-specs/blob/v0.12.1/specs/phase0/fork-choice.md#store
@@ -80,9 +80,12 @@ pub trait ForkChoiceStore<E: EthSpec>: Sized {
     /// Adds to the set of equivocating indices.
     fn extend_equivocating_indices(&mut self, indices: impl IntoIterator<Item = u64>);
 
-    /// Returns the `unsatisfied_inclusion_list_block`.
-    fn unsatisfied_inclusion_list_block(&self) -> &Hash256;
+    /// Returns the `unsatisfied_inclusion_list_blocks` mapping.
+    fn unsatisfied_inclusion_list_blocks(&self) -> &HashMap<Slot, Hash256>;
+
+    /// Returns the `unsatisfied_inclusion_list_block` for the given slot.
+    fn unsatisfied_inclusion_list_block(&self, slot: Slot) -> Option<&Hash256>;
 
     /// Sets the `unsatisfied_inclusion_list_block`.
-    fn set_unsatisfied_inclusion_list_block(&mut self, block_root: Hash256);
+    fn set_unsatisfied_inclusion_list_block(&mut self, slot: Slot, block_root: Hash256);
 }

@@ -731,10 +731,7 @@ impl HttpJsonRpc {
     pub async fn get_inclusion_list<E: EthSpec>(
         &self,
         parent_hash: Hash256,
-    ) -> Result<
-        VariableList<Transaction<E::MaxBytesPerTransaction>, E::MaxTransactionsPerInclusionList>,
-        Error,
-    > {
+    ) -> Result<Option<Vec<String>>, Error> {
         let params = json!([parent_hash]);
 
         self.rpc_request(
@@ -852,11 +849,18 @@ impl HttpJsonRpc {
         Ok(response.into())
     }
 
-    // TODO(fulu): switch to v5 endpoint when the EL is ready for Fulu
-    pub async fn new_payload_v4_fulu<E: EthSpec>(
+    pub async fn new_payload_v5_fulu<E: EthSpec>(
         &self,
         new_payload_request_fulu: NewPayloadRequestFulu<'_, E>,
     ) -> Result<PayloadStatusV1, Error> {
+        // TODO(focil) clean this up?
+        let mut il_transactions = vec![];
+        for transaction in new_payload_request_fulu.il_transactions {
+            if let Ok(hex_tx) = String::from_utf8(transaction.into()).map(|v| format!("0x{}", v)) {
+                il_transactions.push(hex_tx);
+            }
+        }
+
         let params = json!([
             JsonExecutionPayload::V5(new_payload_request_fulu.execution_payload.clone().into()),
             new_payload_request_fulu.versioned_hashes,
@@ -864,11 +868,12 @@ impl HttpJsonRpc {
             new_payload_request_fulu
                 .execution_requests
                 .get_execution_requests_list(),
+            il_transactions
         ]);
 
         let response: JsonPayloadStatusV1 = self
             .rpc_request(
-                ENGINE_NEW_PAYLOAD_V4,
+                ENGINE_NEW_PAYLOAD_V5,
                 params,
                 ENGINE_NEW_PAYLOAD_TIMEOUT * self.execution_timeout_multiplier,
             )
@@ -1301,11 +1306,10 @@ impl HttpJsonRpc {
                 }
             }
             NewPayloadRequest::Fulu(new_payload_request_fulu) => {
-                // TODO(fulu): switch to v5 endpoint when the EL is ready for Fulu
-                if engine_capabilities.new_payload_v4 {
-                    self.new_payload_v4_fulu(new_payload_request_fulu).await
+                if engine_capabilities.new_payload_v5 {
+                    self.new_payload_v5_fulu(new_payload_request_fulu).await
                 } else {
-                    Err(Error::RequiredMethodUnsupported("engine_newPayloadV4"))
+                    Err(Error::RequiredMethodUnsupported("engine_newPayloadV5"))
                 }
             }
         }

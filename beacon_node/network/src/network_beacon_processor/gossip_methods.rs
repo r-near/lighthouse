@@ -2181,8 +2181,7 @@ impl<T: BeaconChainTypes> NetworkBeaconProcessor<T> {
                     .on_verified_inclusion_list(gossip_verified_il.signed_il);
             }
             Err(err) => match err {
-                GossipInclusionListError::FutureSlot { .. }
-                | GossipInclusionListError::PastSlot { .. }
+                GossipInclusionListError::InvalidSlot { .. }
                 | GossipInclusionListError::ValidatorNotInCommittee
                 | GossipInclusionListError::TooManyTransactions
                 | GossipInclusionListError::InvalidSignature

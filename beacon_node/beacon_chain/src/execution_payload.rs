@@ -113,7 +113,7 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
                 .get_inclusion_list_transactions(block.slot())
                 .unwrap_or(vec![].into());
 
-            debug!(chain.log, "Adding inclusion list transactions in the Payload Notifier"; "count" => inclusion_list_transactions.len());
+            debug!(chain.log, "Adding inclusion list transactions in the Payload Notifier"; "count" => inclusion_list_transactions.len(), "slot" => block.slot());
             inclusion_list_transactions
         } else {
             vec![].into()
@@ -215,8 +215,15 @@ async fn notify_new_payload<T: BeaconChainTypes>(
                     // transactions for this slot, update the fork choice store before processing
                     // the invalid EL payload.
                     if *validation_error == Some("INVALID_INCLUSION_LIST".to_string()) {
+                        debug!(
+                            chain.log,
+                            "Unsatisfied inclusion list";
+                        );
                         chain
-                            .set_unsatisfied_inclusion_list_block(block.tree_hash_root())
+                            .set_unsatisfied_inclusion_list_block(
+                                block.slot(),
+                                block.tree_hash_root(),
+                            )
                             .await?;
                     }
 

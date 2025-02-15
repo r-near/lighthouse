@@ -19,41 +19,24 @@ struct Inner<E: EthSpec> {
 }
 
 impl<E: EthSpec> InclusionListCache<E> {
-    pub fn initialize(&mut self, slot: Slot) {
-        let inner = Inner {
-            inclusion_lists: HashSet::new(),
-            inclusion_lists_seen: HashSet::new(),
-            inclusion_list_equivocators: HashSet::new(),
-            inclusion_list_transactions: HashSet::new(),
-        };
-
-        self.inner_map.insert(slot, inner);
-    }
-
     pub fn clear_cache(&mut self, slot: Slot) {
         self.inner_map.remove(&slot);
     }
 
     pub fn on_inclusion_list(&mut self, inclusion_list: SignedInclusionList<E>, log: &Logger) {
-        let Some(inner) = self.inner_map.get_mut(&inclusion_list.message.slot) else {
-            return;
-        };
+        let slot = inclusion_list.message.slot;
+        let inner = self.inner_map.entry(slot).or_default();
 
         if inner
             .inclusion_list_equivocators
             .contains(&inclusion_list.message.validator_index)
         {
-            return;
-        }
-
-        if inner
-            .inclusion_lists_seen
-            .contains(&inclusion_list.message.validator_index)
-            && !inner.inclusion_lists.contains(&inclusion_list)
-        {
-            inner
-                .inclusion_list_equivocators
-                .insert(inclusion_list.message.validator_index);
+            debug!(
+                log,
+                "This validator was flagged for an equivocating inclusion list";
+                "slot" => slot,
+                "validator_index" => inclusion_list.message.validator_index
+            );
             return;
         }
 
@@ -63,6 +46,27 @@ impl<E: EthSpec> InclusionListCache<E> {
             .contains(&inclusion_list.message.validator_index)
             && inner.inclusion_lists.contains(&inclusion_list)
         {
+            debug!(
+                log,
+                "Already seen identical inclusion list from this validator";
+            );
+            return;
+        }
+
+        if inner
+            .inclusion_lists_seen
+            .contains(&inclusion_list.message.validator_index)
+            && !inner.inclusion_lists.contains(&inclusion_list)
+        {
+            debug!(
+                log,
+                "Equivocating inclusion list";
+                "slot" => slot,
+                "validator_index" => inclusion_list.message.validator_index
+            );
+            inner
+                .inclusion_list_equivocators
+                .insert(inclusion_list.message.validator_index);
             return;
         }
 
@@ -78,7 +82,9 @@ impl<E: EthSpec> InclusionListCache<E> {
 
         debug!(
             log,
-            "Successfully added inclusion list transactions to the cache"
+            "Successfully added inclusion list transactions to the cache";
+            "slot" => slot,
+            "total_count" => inner.inclusion_list_transactions.len()
         );
     }
 
@@ -86,7 +92,7 @@ impl<E: EthSpec> InclusionListCache<E> {
         &self,
         slot: Slot,
     ) -> Option<InclusionListTransactions<E>> {
-        let Some(inner) = &self.inner_map.get(&slot) else {
+        let Some(inner) = self.inner_map.get(&slot) else {
             return None;
         };
 

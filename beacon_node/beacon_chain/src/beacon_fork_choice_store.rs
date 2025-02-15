@@ -141,7 +141,7 @@ pub struct BeaconForkChoiceStore<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<
     proposer_boost_root: Hash256,
     equivocating_indices: BTreeSet<u64>,
     inclusion_list_equivocators: HashMap<(Slot, Hash256), BTreeSet<u64>>,
-    unsatisfied_inclusion_list_block: Hash256,
+    unsatisfied_inclusion_list_blocks: HashMap<Slot, Hash256>,
     _phantom: PhantomData<E>,
 }
 
@@ -192,7 +192,7 @@ where
             proposer_boost_root: Hash256::zero(),
             equivocating_indices: BTreeSet::new(),
             inclusion_list_equivocators: HashMap::new(),
-            unsatisfied_inclusion_list_block: Hash256::zero(),
+            unsatisfied_inclusion_list_blocks: HashMap::new(),
             _phantom: PhantomData,
         })
     }
@@ -210,7 +210,6 @@ where
             unrealized_finalized_checkpoint: self.unrealized_finalized_checkpoint,
             proposer_boost_root: self.proposer_boost_root,
             equivocating_indices: self.equivocating_indices.clone(),
-            unsatisfied_inclusion_list_block: self.unsatisfied_inclusion_list_block,
         }
     }
 
@@ -233,7 +232,7 @@ where
             proposer_boost_root: persisted.proposer_boost_root,
             equivocating_indices: persisted.equivocating_indices,
             inclusion_list_equivocators: HashMap::new(),
-            unsatisfied_inclusion_list_block: persisted.unsatisfied_inclusion_list_block,
+            unsatisfied_inclusion_list_blocks: HashMap::new(),
             _phantom: PhantomData,
         })
     }
@@ -352,12 +351,17 @@ where
         self.equivocating_indices.extend(indices);
     }
 
-    fn set_unsatisfied_inclusion_list_block(&mut self, block_root: Hash256) {
-        self.unsatisfied_inclusion_list_block = block_root;
+    fn set_unsatisfied_inclusion_list_block(&mut self, slot: Slot, block_root: Hash256) {
+        self.unsatisfied_inclusion_list_blocks
+            .insert(slot, block_root);
     }
 
-    fn unsatisfied_inclusion_list_block(&self) -> &Hash256 {
-        &self.unsatisfied_inclusion_list_block
+    fn unsatisfied_inclusion_list_block(&self, slot: Slot) -> Option<&Hash256> {
+        self.unsatisfied_inclusion_list_blocks.get(&slot)
+    }
+
+    fn unsatisfied_inclusion_list_blocks(&self) -> &HashMap<Slot, Hash256> {
+        &self.unsatisfied_inclusion_list_blocks
     }
 }
 
@@ -375,5 +379,4 @@ pub struct PersistedForkChoiceStore {
     pub unrealized_finalized_checkpoint: Checkpoint,
     pub proposer_boost_root: Hash256,
     pub equivocating_indices: BTreeSet<u64>,
-    pub unsatisfied_inclusion_list_block: Hash256,
 }

@@ -390,7 +390,7 @@ where
             *fc_store.finalized_checkpoint(),
             current_epoch_shuffling_id,
             next_epoch_shuffling_id,
-            *fc_store.unsatisfied_inclusion_list_block(),
+            fc_store.unsatisfied_inclusion_list_blocks().clone(),
             execution_status,
         )?;
 
@@ -628,9 +628,9 @@ where
     }
 
     // TODO(focil) add documentation
-    pub fn on_invalid_inclusion_list_payload(&mut self, block_root: Hash256) {
+    pub fn on_invalid_inclusion_list_payload(&mut self, slot: Slot, block_root: Hash256) {
         self.fc_store
-            .set_unsatisfied_inclusion_list_block(block_root);
+            .set_unsatisfied_inclusion_list_block(slot, block_root);
     }
 
     /// Add `block` to the fork choice DAG.

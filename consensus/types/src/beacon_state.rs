@@ -1824,6 +1824,7 @@ impl<E: EthSpec> BeaconState<E> {
 
     pub fn get_inclusion_list_duties(
         &self,
+        pubkey: PublicKeyBytes,
         validator_index: usize,
         epoch: Epoch,
         spec: &ChainSpec,
@@ -1837,6 +1838,7 @@ impl<E: EthSpec> BeaconState<E> {
                     slot,
                     validator_index,
                     committee_root,
+                    pubkey,
                 }));
             }
         }

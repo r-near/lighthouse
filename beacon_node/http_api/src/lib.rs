@@ -3584,11 +3584,13 @@ pub fn serve<T: BeaconChainTypes>(
         .and(not_while_syncing_filter.clone())
         .and(task_spawner_filter.clone())
         .and(chain_filter.clone())
+        .and(log_filter.clone())
         .then(
             |query: api_types::ValidatorInclusionListQuery,
              not_synced_filter: Result<(), Rejection>,
              task_spawner: TaskSpawner<T::EthSpec>,
-             chain: Arc<BeaconChain<T>>| {
+             chain: Arc<BeaconChain<T>>,
+             log: Logger| {
                 task_spawner.spawn_async_with_rejection(Priority::P0, async move {
                     not_synced_filter?;
 
@@ -3604,11 +3606,21 @@ pub fn serve<T: BeaconChainTypes>(
                         )));
                     }
 
-                    let data = chain
+                    let data = match chain
                         .produce_inclusion_list(query.slot)
                         .await
                         .map(api_types::GenericResponse::from)
-                        .map_err(warp_utils::reject::unhandled_error)?;
+                    {
+                        Ok(data) => data,
+                        Err(e) => {
+                            error!(
+                                log,
+                                "Failed producing IL";
+                                "err" => format!("{:?}", e),
+                            );
+                            return Err(warp_utils::reject::unhandled_error(e));
+                        }
+                    };
                     Ok::<_, warp::reject::Rejection>(warp::reply::json(&data).into_response())
                 })
             },

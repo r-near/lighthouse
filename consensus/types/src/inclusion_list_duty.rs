@@ -1,7 +1,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(arbitrary::Arbitrary, Debug, PartialEq, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(arbitrary::Arbitrary, Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub struct InclusionListDuty {
     /// The slot during which the validator must produce an inclusion list.
     pub slot: Slot,
@@ -10,4 +10,6 @@ pub struct InclusionListDuty {
     pub validator_index: u64,
     /// The hash tree root of the inclusion list committee.
     pub committee_root: Hash256,
+    /// The pubkey of the validator.
+    pub pubkey: PublicKeyBytes,
 }

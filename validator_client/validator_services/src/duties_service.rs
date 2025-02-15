@@ -13,7 +13,7 @@ use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use doppelganger_service::DoppelgangerStatus;
 use environment::RuntimeContext;
 use eth2::types::{
-    AttesterData, BeaconCommitteeSubscription, DutiesResponse, InclusionListDutyData, ProposerData,
+    AttesterData, BeaconCommitteeSubscription, DutiesResponse, InclusionListDuty, ProposerData,
     StateId, ValidatorId,
 };
 use futures::{stream, StreamExt};
@@ -207,7 +207,7 @@ type DependentRoot = Hash256;
 type AttesterMap = HashMap<PublicKeyBytes, HashMap<Epoch, (DependentRoot, DutyAndProof)>>;
 type ProposerMap = HashMap<Epoch, (DependentRoot, Vec<ProposerData>)>;
 type InclusionListDutiesMap =
-    HashMap<PublicKeyBytes, HashMap<Epoch, (DependentRoot, InclusionListDutyData)>>;
+    HashMap<PublicKeyBytes, HashMap<Epoch, (DependentRoot, InclusionListDuty)>>;
 
 /// See the module-level documentation.
 pub struct DutiesService<T, E: EthSpec> {
@@ -334,8 +334,8 @@ impl<T: SlotClock + 'static, E: EthSpec> DutiesService<T, E> {
             .collect()
     }
 
-    /// Returns all `InclusionListDutyData` for the given `slot`.
-    pub fn inclusion_list_duties(&self, slot: Slot) -> Vec<InclusionListDutyData> {
+    /// Returns all `InclusionListDuty` for the given `slot`.
+    pub fn inclusion_list_duties(&self, slot: Slot) -> Vec<InclusionListDuty> {
         let epoch = slot.epoch(E::slots_per_epoch());
 
         if !self.spec.is_focil_enabled_for_epoch(epoch) {
@@ -1370,7 +1370,7 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
         return Ok(());
     }
 
-    // TODO: add fetch metric
+    // TODO(focil): add fetch metric
 
     // Request duties for all uninitialized validators. If there isn't any, we will just request for
     // `INITIAL_DUTIES_QUERY_SIZE` validators. We use the `dependent_root` in the response to
@@ -1387,6 +1387,12 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
     let response =
         post_validator_duties_inclusion_list(duties_service, epoch, initial_indices_to_request)
             .await?;
+
+    debug!(
+        log,
+        "inclusion list duties";
+        "count" => response.data.len(),
+    );
     let dependent_root = response.dependent_root;
 
     // Find any validators which have conflicting (epoch, dependent_root) values or missing duties for the epoch.
@@ -1443,7 +1449,7 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
         "num_new_duties" => new_duties.len(),
     );
 
-    // Update the duties service with the new `InclusionListDutyData` messages.
+    // Update the duties service with the new `InclusionListDuty` messages.
     let mut inclusion_list_duties = duties_service.inclusion_list_duties.write();
     // TODO(focil) this variable is unused at the moment
     let _current_slot = duties_service
@@ -1490,7 +1496,7 @@ async fn post_validator_duties_inclusion_list<T: SlotClock + 'static, E: EthSpec
     duties_service: &Arc<DutiesService<T, E>>,
     epoch: Epoch,
     validator_indices: &[u64],
-) -> Result<DutiesResponse<Vec<InclusionListDutyData>>, Error> {
+) -> Result<DutiesResponse<Vec<InclusionListDuty>>, Error> {
     duties_service
         .beacon_nodes
         .first_success(|beacon_node| async move {

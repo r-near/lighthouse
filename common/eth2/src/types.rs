@@ -748,14 +748,6 @@ pub struct ProposerData {
     pub slot: Slot,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InclusionListDutyData {
-    pub pubkey: PublicKeyBytes,
-    #[serde(with = "serde_utils::quoted_u64")]
-    pub validator_index: u64,
-    pub slot: Slot,
-}
-
 #[derive(Clone, Deserialize)]
 pub struct ValidatorBlocksQuery {
     pub randao_reveal: SignatureBytes,

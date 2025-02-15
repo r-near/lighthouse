@@ -370,7 +370,7 @@ impl ProtoArrayForkChoice {
         finalized_checkpoint: Checkpoint,
         current_epoch_shuffling_id: AttestationShufflingId,
         next_epoch_shuffling_id: AttestationShufflingId,
-        unsatisfied_inclusion_list_block: Hash256,
+        unsatisfied_inclusion_list_blocks: HashMap<Slot, Hash256>,
         execution_status: ExecutionStatus,
     ) -> Result<Self, String> {
         let mut proto_array = ProtoArray {
@@ -379,7 +379,7 @@ impl ProtoArrayForkChoice {
             finalized_checkpoint,
             nodes: Vec::with_capacity(1),
             indices: HashMap::with_capacity(1),
-            unsatisfied_inclusion_list_block,
+            unsatisfied_inclusion_list_blocks,
             previous_proposer_boost: ProposerBoost::default(),
         };
 
@@ -1033,7 +1033,7 @@ mod test_compute_deltas {
             genesis_checkpoint,
             junk_shuffling_id.clone(),
             junk_shuffling_id.clone(),
-            Hash256::ZERO,
+            HashMap::new(),
             execution_status,
         )
         .unwrap();
@@ -1160,7 +1160,7 @@ mod test_compute_deltas {
             genesis_checkpoint,
             junk_shuffling_id.clone(),
             junk_shuffling_id.clone(),
-            Hash256::ZERO,
+            HashMap::new(),
             execution_status,
         )
         .unwrap();

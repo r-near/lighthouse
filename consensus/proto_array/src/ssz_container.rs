@@ -8,7 +8,7 @@ use ssz::{four_byte_option_impl, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashMap;
 use superstruct::superstruct;
-use types::{Checkpoint, Hash256};
+use types::{Checkpoint, Hash256, Slot};
 
 // Define a "legacy" implementation of `Option<usize>` which uses four bytes for encoding the union
 // selector.
@@ -27,7 +27,7 @@ pub struct SszContainer {
     pub nodes: Vec<ProtoNodeV17>,
     pub indices: Vec<(Hash256, usize)>,
     pub previous_proposer_boost: ProposerBoost,
-    pub unsatisfied_inclusion_list_block: Hash256,
+    pub unsatisfied_inclusion_list_blocks: Vec<(Slot, Hash256)>,
 }
 
 impl From<&ProtoArrayForkChoice> for SszContainer {
@@ -43,7 +43,11 @@ impl From<&ProtoArrayForkChoice> for SszContainer {
             nodes: proto_array.nodes.clone(),
             indices: proto_array.indices.iter().map(|(k, v)| (*k, *v)).collect(),
             previous_proposer_boost: proto_array.previous_proposer_boost,
-            unsatisfied_inclusion_list_block: proto_array.unsatisfied_inclusion_list_block,
+            unsatisfied_inclusion_list_blocks: proto_array
+                .unsatisfied_inclusion_list_blocks
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect(),
         }
     }
 }
@@ -58,8 +62,11 @@ impl TryFrom<SszContainer> for ProtoArrayForkChoice {
             finalized_checkpoint: from.finalized_checkpoint,
             nodes: from.nodes,
             indices: from.indices.into_iter().collect::<HashMap<_, _>>(),
-            unsatisfied_inclusion_list_block: from.unsatisfied_inclusion_list_block,
             previous_proposer_boost: from.previous_proposer_boost,
+            unsatisfied_inclusion_list_blocks: from
+                .unsatisfied_inclusion_list_blocks
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
         };
 
         Ok(Self {

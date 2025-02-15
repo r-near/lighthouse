@@ -1,14 +1,13 @@
 use crate::duties_service::DutiesService;
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use environment::RuntimeContext;
-use eth2::types::InclusionListDutyData;
 use futures::future::join_all;
-use slog::{crit, error, info, trace, warn};
+use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use types::{ChainSpec, EthSpec, Slot};
+use types::{ChainSpec, EthSpec, InclusionList, InclusionListDuty, Slot};
 use validator_store::{Error as ValidatorStoreError, ValidatorStore};
 
 /// Helper to minimise `Arc` usage.
@@ -118,9 +117,18 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         _slot_duration: Duration,
         spec: &ChainSpec,
     ) -> Result<(), String> {
+        debug!(
+            self.context.log(),
+            "Spawning inclusion list task";
+        );
+
         let next_slot = self.slot_clock.now().ok_or("Failed to read slot clock")? + 1;
 
         if !spec.is_focil_enabled_for_epoch(next_slot.epoch(E::slots_per_epoch())) {
+            debug!(
+                self.context.log(),
+                "FOCIL not enabled";
+            );
             return Ok(());
         }
 
@@ -153,7 +161,7 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
     async fn produce_and_publish_inclusion_lists(
         self,
         slot: Slot,
-        validator_duties: Vec<InclusionListDutyData>,
+        validator_duties: Vec<InclusionListDuty>,
     ) -> Result<(), ()> {
         let log = self.context.log();
         let validator_store = self.validator_store.clone();
@@ -178,12 +186,12 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             )
         })?;
 
-        let inclusion_list = self
+        let inclusion_list_transactions = self
             .beacon_nodes
             .first_success(|beacon_node| async move {
                 // TODO(focil) add timer metric
                 beacon_node
-                    .get_validator_inclusion_list(slot)
+                    .get_validator_inclusion_list::<E>(slot)
                     .await
                     .map_err(|e| format!("Failed to produce inclusion list: {:?}", e))
                     .map(|result| result.ok_or("Inclusion list unavailable".to_string()))?
@@ -201,6 +209,12 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
 
         // Create futures to produce signed `InclusionList` objects.
         let signing_futures = validator_duties.iter().map(|duty| {
+            let inclusion_list = InclusionList {
+                slot,
+                transactions: inclusion_list_transactions.clone(),
+                inclusion_list_committee_root: duty.committee_root,
+                validator_index: duty.validator_index,
+            };
             let inclusion_list = inclusion_list.clone();
             let validator_store = Arc::clone(&validator_store);
             async move {

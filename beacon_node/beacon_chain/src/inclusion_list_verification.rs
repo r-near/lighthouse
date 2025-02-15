@@ -6,13 +6,9 @@ use types::{Domain, EthSpec, SignedInclusionList, SignedRoot, Slot};
 
 #[derive(Debug, AsRefStr)]
 pub enum GossipInclusionListError {
-    FutureSlot {
+    InvalidSlot {
         message_slot: Slot,
-        latest_permissible_slot: Slot,
-    },
-    PastSlot {
-        message_slot: Slot,
-        earliest_permissible_slot: Slot,
+        current_slot: Slot,
     },
     InvalidCommitteeRoot,
     ValidatorNotInCommittee,
@@ -40,24 +36,16 @@ impl<T: BeaconChainTypes> GossipVerifiedInclusionList<T> {
     ) -> Result<Self, GossipInclusionListError> {
         // the slot is equal to the previous slot or the current slot
         let message_slot = signed_il.message.slot;
-        let earliest_permissible_slot = chain
+
+        let current_slot = chain
             .slot_clock
-            .now_with_past_tolerance(chain.spec.maximum_gossip_clock_disparity())
+            .now()
             .ok_or(BeaconChainError::UnableToReadSlot)?;
-        if message_slot < earliest_permissible_slot {
-            return Err(GossipInclusionListError::PastSlot {
+
+        if message_slot != current_slot + 1 {
+            return Err(GossipInclusionListError::InvalidSlot {
                 message_slot,
-                earliest_permissible_slot,
-            });
-        }
-        let latest_permissible_slot = chain
-            .slot_clock
-            .now_with_future_tolerance(chain.spec.maximum_gossip_clock_disparity())
-            .ok_or(BeaconChainError::UnableToReadSlot)?;
-        if message_slot > latest_permissible_slot {
-            return Err(GossipInclusionListError::FutureSlot {
-                message_slot,
-                latest_permissible_slot,
+                current_slot,
             });
         }
 

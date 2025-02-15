@@ -2476,7 +2476,7 @@ impl BeaconNodeHttpClient {
     pub async fn get_validator_inclusion_list<E: EthSpec>(
         &self,
         slot: Slot,
-    ) -> Result<Option<GenericResponse<InclusionList<E>>>, Error> {
+    ) -> Result<Option<GenericResponse<InclusionListTransactions<E>>>, Error> {
         let mut path = self.eth_path(V1)?;
 
         path.path_segments_mut()
@@ -2565,7 +2565,7 @@ impl BeaconNodeHttpClient {
         &self,
         epoch: Epoch,
         indices: &[u64],
-    ) -> Result<DutiesResponse<Vec<InclusionListDutyData>>, Error> {
+    ) -> Result<DutiesResponse<Vec<InclusionListDuty>>, Error> {
         let mut path = self.eth_path(V1)?;
 
         path.path_segments_mut()

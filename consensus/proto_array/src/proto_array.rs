@@ -134,7 +134,7 @@ pub struct ProtoArray {
     pub finalized_checkpoint: Checkpoint,
     pub nodes: Vec<ProtoNode>,
     pub indices: HashMap<Hash256, usize>,
-    pub unsatisfied_inclusion_list_block: Hash256,
+    pub unsatisfied_inclusion_list_blocks: HashMap<Slot, Hash256>,
     pub previous_proposer_boost: ProposerBoost,
 }
 
@@ -197,8 +197,14 @@ impl ProtoArray {
             let execution_status_is_invalid = node.execution_status.is_invalid();
 
             // TODO(focil) seems sketchy...
+            // modify is viable for head
+            // debug/fork_choice
             let mut node_delta = if execution_status_is_invalid
-                || node.root == self.unsatisfied_inclusion_list_block
+                || node.root
+                    == *self
+                        .unsatisfied_inclusion_list_blocks
+                        .get(&current_slot)
+                        .unwrap_or(&Hash256::ZERO)
             {
                 // If the node has an invalid execution payload, or the payload doesn't satisfy
                 // an inclusion list, reduce its weight to zero.
@@ -892,7 +898,13 @@ impl ProtoArray {
             return false;
         }
 
-        if node.root == self.unsatisfied_inclusion_list_block {
+        // TODO(focil) unwrap_or
+        if node.root
+            == *self
+                .unsatisfied_inclusion_list_blocks
+                .get(&current_slot)
+                .unwrap_or(&Hash256::ZERO)
+        {
             return false;
         }
 

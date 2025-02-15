@@ -166,6 +166,20 @@ pub enum Error {
     BeaconStateError(BeaconStateError),
     PayloadTypeMismatch,
     VerifyingVersionedHashes(versioned_hashes::Error),
+    HexError(hex::FromHexError),
+    SszTypeError(ssz_types::Error),
+}
+
+impl From<ssz_types::Error> for Error {
+    fn from(e: ssz_types::Error) -> Self {
+        Error::SszTypeError(e)
+    }
+}
+
+impl From<hex::FromHexError> for Error {
+    fn from(e: hex::FromHexError) -> Self {
+        Error::HexError(e)
+    }
 }
 
 impl From<BeaconStateError> for Error {
@@ -1958,12 +1972,24 @@ impl<E: EthSpec> ExecutionLayer<E> {
         parent_hash: Hash256,
     ) -> Result<InclusionListTransactions<E>, Error> {
         debug!(self.log(), "Requesting inclusion list from EL"; "parent_hash" => %parent_hash);
-        let transactions = self
+        let raw_transactions = self
             .engine()
             .api
             .get_inclusion_list::<E>(parent_hash)
             .await?;
-        Ok(transactions)
+        // TODO(focil) clean this up?
+        let mut transactions = vec![];
+
+        let Some(raw_transactions) = raw_transactions else {
+            debug!(self.log(), "The EL sent an empty inclusion list"; "parent_hash" => %parent_hash);
+            return Ok(transactions.into());
+        };
+        for raw_tx in raw_transactions {
+            let decoded_hex_tx =
+                VariableList::new(hex::decode(raw_tx.strip_prefix("0x").unwrap_or(&raw_tx))?)?;
+            transactions.push(decoded_hex_tx);
+        }
+        Ok(transactions.into())
     }
 }
 

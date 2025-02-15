@@ -1702,7 +1702,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// non-existing/inactive validators will have `None` values.
     pub fn validator_inclusion_list_duties(
         &self,
-        validator_indices: &[u64],
+        validator_indices_pubkeys: &[(usize, PublicKeyBytes)],
         epoch: Epoch,
         head_block_root: Hash256,
     ) -> Result<(Vec<Option<InclusionListDuty>>, Hash256), Error> {
@@ -1732,11 +1732,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         let Some(head_beacon_state) = head_beacon_state else {
             return Err(Error::MissingBeaconState(head_block.root));
         };
-        let duties = validator_indices
+        let duties = validator_indices_pubkeys
             .iter()
-            .map(|&validator_index| {
+            .map(|(validator_index, pubkey_bytes)| {
                 head_beacon_state
-                    .get_inclusion_list_duties(validator_index as usize, epoch, &self.spec)
+                    .get_inclusion_list_duties(*pubkey_bytes, *validator_index, epoch, &self.spec)
                     .map_err(Error::InclusionListDutiesError)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -2124,13 +2124,22 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // Use a blocking task since blocking the core executor on the canonical head read lock can
         // block the core tokio executor.
         let chain = self.clone();
-        let (head_slot, head_hash) = self
+        let (head_slot, parent_hash) = self
             .spawn_blocking_handle(
                 move || {
                     let cached_head = chain.canonical_head.cached_head();
                     let head_slot = cached_head.head_slot();
-                    let head_hash = cached_head.head_hash();
-                    (head_slot, head_hash)
+                    // let head_hash = cached_head.head_hash();
+                    if let Ok(execution_payload) = cached_head
+                        .snapshot
+                        .beacon_block
+                        .message()
+                        .execution_payload()
+                    {
+                        (head_slot, Some(execution_payload.parent_hash()))
+                    } else {
+                        (head_slot, None)
+                    }
                 },
                 "produce_inclusion_list_head_read",
             )
@@ -2138,11 +2147,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         // NOTE: not sure how to handle scenario where head hash is `None` i.e. pre-bellatrix, which
         // is pre-electra.
-        let Some(head_hash) = head_hash else {
-            debug!(
-                self.log,
-                "Attempted to produce inclusion list pre-bellatrix"
-            );
+        let Some(parent_hash) = parent_hash else {
+            debug!(self.log, "Failed to fetch parent_hash");
             return Ok(None);
         };
 
@@ -2172,12 +2178,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             return Ok(None);
         }
 
+        debug!(self.log, "Attempt to fetch IL from EL"; "parent_hash" => %parent_hash, "current_slot" => %current_slot);
         // Retrieve the inclusion list from the execution layer.
         let inclusion_list = execution_layer
-            .get_inclusion_list(head_hash.into_root())
+            .get_inclusion_list(parent_hash.0)
             .await
             .map_err(|e| Error::ExecutionLayerGetInclusionListFailed(Box::new(e)))?;
-
         debug!(self.log, "Inclusion list fetched from EL"; "tx_count" => inclusion_list.len());
 
         Ok(Some(inclusion_list))
@@ -7364,6 +7370,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     pub async fn set_unsatisfied_inclusion_list_block(
         self: &Arc<Self>,
+        slot: Slot,
         block_root: Hash256,
     ) -> Result<(), Error> {
         let chain = self.clone();
@@ -7373,7 +7380,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     chain
                         .canonical_head
                         .fork_choice_write_lock()
-                        .on_invalid_inclusion_list_payload(block_root)
+                        .on_invalid_inclusion_list_payload(slot, block_root)
                 },
                 "invalid_inclusion_list_payload",
             )
