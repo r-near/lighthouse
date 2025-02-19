@@ -13,7 +13,8 @@ use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use doppelganger_service::DoppelgangerStatus;
 use environment::RuntimeContext;
 use eth2::types::{
-    AttesterData, BeaconCommitteeSubscription, DutiesResponse, ProposerData, StateId, ValidatorId,
+    AttesterData, BeaconCommitteeSelection, BeaconCommitteeSubscription, DutiesResponse,
+    ProposerData, StateId, ValidatorId,
 };
 use futures::{stream, StreamExt};
 use parking_lot::RwLock;
@@ -132,36 +133,47 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     distributed: bool,
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Result<Option<SelectionProof>, Error> {
-    if distributed {
-        // call the middleware for the endpoint /eth/v1/validator/beacon_committee_subscriptions
+    let selection_proof = if distributed {
+        // Call the endpoint /eth/v1/validator/beacon_committee_selections
+        // During the call, we submit a partial selection proof in the data field of the POST HTTP endpoint
+        // The end point (middleware) should return a full selection proof
+
+        let selections = BeaconCommitteeSelection {
+            validator_index: duty.validator_idnex,
+            slot: duty.slot,
+            selection_proof: validator_store
+                .produce_selection_proof(duty.pubkey, duty.slot)
+                .await
+                .map_err(Error::FailedToProduceSelectionProof)?;
+        };
+
         beacon_nodes
             .first_success(|beacon_node| async move {
                 beacon_node
-                    .post_validator_beacon_committee_subscriptions()
+                    .post_validator_beacon_committee_selections(selections)
                     .await
             })
             .await
             .map_err(|e| Error::FailedToProduceSelectionProof(e.to_string()))
-            .map(|_| None)
     } else {
-        let selection_proof = validator_store
+        validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
             .await
             .map_err(Error::FailedToProduceSelectionProof)?;
-
-        selection_proof
-            .is_aggregator(duty.committee_length as usize, spec)
-            .map_err(Error::InvalidModulo)
-            .map(|is_aggregator| {
-                if is_aggregator {
-                    Some(selection_proof)
-                } else {
-                    // Don't bother storing the selection proof if the validator isn't an
-                    // aggregator, we won't need it.
-                    None
-                }
-            })
-    }
+    };
+    
+    selection_proof
+        .is_aggregator(duty.committee_length as usize, spec)
+        .map_err(Error::InvalidModulo)
+        .map(|is_aggregator| {
+            if is_aggregator {
+                Some(selection_proof)
+            } else {
+                // Don't bother storing the selection proof if the validator isn't an
+                // aggregator, we won't need it.
+                None
+            }
+        })
 }
 
 impl DutyAndProof {
