@@ -1060,19 +1060,10 @@ impl ProtoArray {
 
     /// Returns all node indices that have zero children. May include unviable nodes.
     fn nodes_without_children(&self) -> Vec<usize> {
-        let mut childs_of = HashMap::<_, Vec<_>>::new();
-        for (index, node) in self.nodes.iter().enumerate() {
-            // Create entry for this node
-            childs_of.entry(index).or_default();
-            // Add this node to the parent's child list if any
-            if let Some(parent_index) = node.parent {
-                childs_of.entry(parent_index).or_default().push(index);
-            }
-        }
-        childs_of
-            .into_iter()
-            .filter(|(_, childs)| childs.is_empty())
-            .map(|(index, _)| index)
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, node)| node.best_child.is_none().then_some(i))
             .collect()
     }
 }
