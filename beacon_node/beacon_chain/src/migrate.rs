@@ -688,7 +688,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             debug!(log, "Pruning block"; "block_root" => ?block_root);
         }
         for (slot, state_root) in &states_to_prune {
-            debug!(log, "Pruning state"; "state_root" => ?state_root, "slot" => slot);
+            debug!(log, "Pruning hot state"; "state_root" => ?state_root, "slot" => slot);
         }
 
         let mut batch: Vec<StoreOp<E>> = blocks_to_prune

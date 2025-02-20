@@ -19,39 +19,42 @@ pub fn upgrade_to_v23<T: BeaconChainTypes>(
     _log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
     // Set the head-tracker to empty
-
     let Some(persisted_beacon_chain_v22) =
         db.get_item::<PersistedBeaconChainV22>(&BEACON_CHAIN_DB_KEY)?
     else {
-        // If there is no persisted beacon chain, ignore the upgrade
-        return Ok(vec![]);
+        return Err(Error::MigrationError(
+            "No persisted beacon chain found in DB. Datadir could be incorrect or DB could be corrupt".to_string()
+        ));
     };
 
     let persisted_beacon_chain = PersistedBeaconChain {
         genesis_block_root: persisted_beacon_chain_v22.genesis_block_root,
     };
 
-    db.put_item::<PersistedBeaconChain>(&BEACON_CHAIN_DB_KEY, &persisted_beacon_chain)?;
+    let ops = vec![persisted_beacon_chain.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
 
-    todo!();
+    Ok(ops)
 }
 
 pub fn downgrade_from_v23<T: BeaconChainTypes>(
     db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
     log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
-    // recreate head-tracker from the fork-choice
-
-    let Some(persisted_fork_choice) = db.get_item::<PersistedForkChoice>(&FORK_CHOICE_DB_KEY)?
-    else {
-        // Is it possible for the fork-choice to not exist on a downgrade?
-        return Ok(vec![]);
-    };
-
     let Some(persisted_beacon_chain) = db.get_item::<PersistedBeaconChain>(&BEACON_CHAIN_DB_KEY)?
     else {
-        // TODO: Is it possible for persisted beacon chain to be missing if the fork choice exists?
-        return Ok(vec![]);
+        // The `PersistedBeaconChain` must exist if fork choice exists.
+        return Err(Error::MigrationError(
+            "No persisted beacon chain found in DB. Datadir could be incorrect or DB could be corrupt".to_string(),
+        ));
+    };
+
+    // Recreate head-tracker from fork choice.
+    let Some(persisted_fork_choice) = db.get_item::<PersistedForkChoice>(&FORK_CHOICE_DB_KEY)?
+    else {
+        // Fork choice should exist if the database exists.
+        return Err(Error::MigrationError(
+            "No fork choice found in DB".to_string(),
+        ));
     };
 
     let fc_store =
@@ -62,7 +65,8 @@ pub fn downgrade_from_v23<T: BeaconChainTypes>(
                 ))
             })?;
 
-    // TODO: what value to choose here?
+    // Doesn't matter what policy we use for invalid payloads, as our head calculation just
+    // considers descent from finalization.
     let reset_payload_statuses = ResetPayloadStatuses::OnlyWithInvalidPayload;
     let fork_choice = ForkChoice::from_persisted(
         persisted_fork_choice.fork_choice,
@@ -91,9 +95,9 @@ pub fn downgrade_from_v23<T: BeaconChainTypes>(
         },
     };
 
-    db.put_item::<PersistedBeaconChainV22>(&BEACON_CHAIN_DB_KEY, &persisted_beacon_chain_v22)?;
+    let ops = vec![persisted_beacon_chain_v22.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
 
-    todo!();
+    Ok(ops)
 }
 
 /// Helper struct that is used to encode/decode the state of the `HeadTracker` as SSZ bytes.
