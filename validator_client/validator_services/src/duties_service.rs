@@ -147,13 +147,19 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         // Call the endpoint /eth/v1/validator/beacon_committee_selections
         // The middleware should return a full selection proof here
         beacon_nodes
-            .first_success(|beacon_node| async move {
-                beacon_node
-                    .post_validator_beacon_committee_selections(&[selections])
-                    .await
+            .first_success(|beacon_node| {
+                let value = selections.clone();
+                async move {
+                    beacon_node
+                        .post_validator_beacon_committee_selections(&[value])
+                        .await
+                }
             })
             .await
-            .map_err(Error::FailedToProduceSelectionProof)?
+            .map_err(|e| {
+                Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(e.to_string()))
+            })?
+            .data
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)

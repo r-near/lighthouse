@@ -34,6 +34,7 @@ pub enum Error {
     GreaterThanCurrentEpoch { epoch: Epoch, current_epoch: Epoch },
     UnableToSignAttestation(AttestationError),
     UnableToSign(SigningError),
+    Middleware(String),
 }
 
 impl From<SigningError> for Error {
