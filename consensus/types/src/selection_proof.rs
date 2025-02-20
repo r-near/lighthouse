@@ -8,6 +8,7 @@ use ssz::Encode;
 use std::cmp;
 
 #[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SelectionProof(Signature);
 
 impl SelectionProof {

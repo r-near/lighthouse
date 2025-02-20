@@ -2669,7 +2669,7 @@ impl BeaconNodeHttpClient {
     pub async fn post_validator_beacon_committee_selections(
         &self,
         selections: &[BeaconCommitteeSelection],
-    ) -> Result<GenericResponse<SelectionProof>, Error> {
+    ) -> Result<GenericResponse<Vec<SelectionProof>>, Error> {
         let mut path = self.eth_path(V1)?;
 
         path.path_segments_mut()
