@@ -2669,7 +2669,7 @@ impl BeaconNodeHttpClient {
     pub async fn post_validator_beacon_committee_selections(
         &self,
         selections: &[BeaconCommitteeSelection],
-    ) -> Result<(), Error> {
+    ) -> Result<GenericResponse<SelectionProof>, Error> {
         let mut path = self.eth_path(V1)?;
 
         path.path_segments_mut()
@@ -2677,7 +2677,7 @@ impl BeaconNodeHttpClient {
             .push("validator")
             .push("beacon_committee_selections");
 
-        self.post_with_timeout(path, &selections, self.timeouts.attester_duties)
+        self.post_with_timeout_and_response(path, &selections, self.timeouts.attester_duties)
             .await
     }
 }

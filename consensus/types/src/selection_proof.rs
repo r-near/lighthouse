@@ -3,10 +3,11 @@ use crate::{
 };
 use ethereum_hashing::hash;
 use safe_arith::{ArithError, SafeArith};
+use serde::{Deserialize, Serialize};
 use ssz::Encode;
 use std::cmp;
 
-#[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone)]
+#[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionProof(Signature);
 
 impl SelectionProof {
