@@ -558,7 +558,7 @@ pub fn cli_app() -> Command {
                 .long("disable-attesting")
                 .help("Turn off attestation related APIs so that we have some hope of producing \
                        blocks")
-                .action(ArgAction::Set)
+                .action(ArgAction::SetTrue)
                 .display_order(0)
         )
         .arg(
