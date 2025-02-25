@@ -46,11 +46,11 @@ tree_hash = { workspace = true }
 types = { workspace = true }
 warp = { workspace = true }
 warp_utils = { workspace = true }
+proto_array = { workspace = true }
 
 [dev-dependencies]
 genesis = { workspace = true }
 logging = { workspace = true }
-proto_array = { workspace = true }
 serde_json = { workspace = true }
 
 [[test]]
