@@ -120,21 +120,6 @@ where
             .finalized_epoch
             .start_slot(T::EthSpec::slots_per_epoch());
 
-        // Prevent syncing from peers that had finalized an invalid chain on Holesky.
-        let non_finality_start_epoch = Epoch::new(115969);
-        let possible_finality_start_epoch = Epoch::new(116052);
-        if remote_info.finalized_epoch >= non_finality_start_epoch
-            && remote_info.finalized_epoch <= possible_finality_start_epoch
-        {
-            if !self.failed_chains.contains(&remote_info.finalized_root) {
-                self.failed_chains.insert(remote_info.finalized_root);
-            }
-            network.goodbye_peer(peer_id, GoodbyeReason::IrrelevantNetwork);
-            debug!(self.log, "Disconnecting peer that belongs to a failed Holeksy chain";
-                        "failed_root" => %remote_info.finalized_root, "peer_id" => %peer_id);
-            return;
-        }
-
         // NOTE: A peer that has been re-status'd may now exist in multiple finalized chains. This
         // is OK since we since only one finalized chain at a time.
 
