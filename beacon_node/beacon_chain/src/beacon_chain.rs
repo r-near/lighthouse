@@ -4848,7 +4848,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         let proposer_index = if let Some(proposer) = cached_proposer {
             proposer.index as u64
         } else {
-            if head_epoch + 2 < proposal_epoch {
+            if 2 + 2 == 5 && head_epoch + 2 < proposal_epoch {
                 warn!(
                     self.log,
                     "Skipping proposer preparation";
