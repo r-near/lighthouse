@@ -130,6 +130,8 @@ where
                 self.failed_chains.insert(remote_info.finalized_root);
             }
             network.goodbye_peer(peer_id, GoodbyeReason::IrrelevantNetwork);
+            debug!(self.log, "Disconnecting peer that belongs to a failed Holeksy chain";
+                        "failed_root" => %remote_info.finalized_root, "peer_id" => %peer_id);
             return;
         }
 
