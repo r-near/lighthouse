@@ -578,7 +578,7 @@ pub enum RpcSuccessResponse<E: EthSpec> {
     Pong(Ping),
 
     /// A response to a META_DATA request.
-    MetaData(Arc<MetaData<E>>),
+    MetaData(MetaData<E>),
 }
 
 /// Indicates which response is being terminated by a stream termination response.
