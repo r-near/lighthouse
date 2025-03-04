@@ -5062,6 +5062,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-gossipsub"
+version = "0.48.1"
+source = "git+https://github.com/sigp/rust-libp2p.git?branch=rework-behaviour-handler-message-dispatch#7d988d987ae39d53aa3cc28c2bd407494e3ac9c4"
+dependencies = [
+ "async-channel 2.3.1",
+ "asynchronous-codec",
+ "base64 0.22.1",
+ "byteorder",
+ "bytes",
+ "either",
+ "fnv",
+ "futures",
+ "futures-timer",
+ "getrandom 0.2.15",
+ "hashlink 0.9.1",
+ "hex_fmt",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-swarm",
+ "prometheus-client",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "rand 0.8.5",
+ "regex",
+ "sha2 0.10.8",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
 name = "libp2p-identify"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5465,7 +5495,7 @@ dependencies = [
  "hex",
  "itertools 0.10.5",
  "libp2p",
- "libp2p-gossipsub",
+ "libp2p-gossipsub 0.48.1 (git+https://github.com/sigp/rust-libp2p.git?branch=rework-behaviour-handler-message-dispatch)",
  "libp2p-mplex",
  "lighthouse_version",
  "local-ip-address",
@@ -6117,7 +6147,7 @@ dependencies = [
  "itertools 0.10.5",
  "k256 0.13.4",
  "kzg",
- "libp2p-gossipsub",
+ "libp2p-gossipsub 0.48.1 (git+https://github.com/sigp/rust-libp2p.git?tag=sigp-gossipsub-0.1)",
  "lighthouse_network",
  "logging",
  "lru_cache",
