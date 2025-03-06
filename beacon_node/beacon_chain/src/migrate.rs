@@ -533,7 +533,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         if state_summaries_dag_roots.len() > 1 {
             warn!(
                 log,
-                "Prune state summaries dag found more than one root";
+                "State summaries DAG found more than one root";
+                "location" => "pruning",
+                "new_finalized_state_root" => ?new_finalized_state_root,
                 "state_summaries_dag_roots" => ?state_summaries_dag_roots
             );
         }
@@ -586,11 +588,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         let newly_finalized_blocks = state_summaries_dag
             .blocks_of_states(newly_finalized_state_roots.iter())
             .map_err(|e| PruningError::SummariesDagError("blocks of newly finalized", e))?;
-        let newly_finalized_blocks_min_slot = *newly_finalized_blocks
-            .iter()
-            .map(|(_, slot)| slot)
-            .min()
-            .ok_or(PruningError::EmptyFinalizedBlocks)?;
 
         // Compute the set of finalized state roots that we must keep to make the dynamic HDiff system
         // work.
@@ -615,15 +612,15 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         //  \---[3]--|-----------------[4]
         //           |
 
-        for (slot, summaries) in state_summaries_dag.summaries_by_slot_ascending() {
-            for (state_root, _) in summaries {
+        for (_, summaries) in state_summaries_dag.summaries_by_slot_ascending() {
+            for (state_root, summary) in summaries {
                 let should_prune = if finalized_and_descendant_state_roots_of_finalized_checkpoint
                     .contains(&state_root)
                 {
                     // This state is a viable descendant of the finalized checkpoint, so does not
                     // conflict with finality and can be built on or become a head
                     false
-                } else if required_finalized_diff_state_slots.contains(&slot) {
+                } else if required_finalized_diff_state_slots.contains(&summary.slot) {
                     // Keep this state and diff as it's necessary for the finalized portion of the
                     // HDiff links. `required_finalized_diff_state_slots` tracks the set of slots on
                     // each diff layer, and by checking `newly_finalized_state_roots` which only
@@ -638,11 +635,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                     //
                     //                  /-----o----
                     // o-------o------/-------o----
-                    if slot < newly_finalized_states_min_slot
+                    if summary.slot < newly_finalized_states_min_slot
                         || newly_finalized_state_roots.contains(&state_root)
                     {
                         // Track kept summaries to debug hdiff inconsistencies with "Extra pruning information"
-                        kept_summaries_for_hdiff.push((state_root, slot));
+                        kept_summaries_for_hdiff.push((state_root, summary.slot));
                         false
                     } else {
                         true
@@ -655,12 +652,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 if should_prune {
                     // States are migrated into the cold DB in the migrate step. All hot states
                     // prior to finalized can be pruned from the hot DB columns
-                    states_to_prune.insert((slot, state_root));
+                    states_to_prune.insert((summary.slot, state_root));
                 }
             }
         }
 
-        for (block_root, slot) in state_summaries_dag.iter_blocks() {
+        for (block_root, block_slot) in state_summaries_dag.iter_blocks() {
             // Blocks both finalized and unfinalized are in the same DB column. We must only
             // prune blocks from abandoned forks. Note that block pruning and state pruning differ.
             // The blocks DB column is shared for hot and cold data, while the states have different
@@ -672,10 +669,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 // itself Note that we anchor this set on the finalized checkpoint instead of the
                 // finalized block. A diagram above shows a relevant example.
                 false
-            } else if newly_finalized_blocks.contains(&(block_root, slot)) {
+            } else if newly_finalized_blocks.contains(&(block_root, block_slot)) {
                 // Keep recently finalized blocks
                 false
-            } else if slot < newly_finalized_blocks_min_slot {
+            } else if block_slot < newly_finalized_states_min_slot {
+                // Note: newly_finalized_states_min_slot == newly_finalized_blocks_min_slot
+                //
                 // Keep recently finalized blocks that we know are canonical. Blocks with slots <
                 // that `newly_finalized_blocks_min_slot` we don't have canonical information so we
                 // assume they are part of the finalized pruned chain
@@ -702,26 +701,37 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             log,
             "Extra pruning information";
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
+            "new_finalized_state_root" => ?new_finalized_state_root,
             "newly_finalized_blocks" => newly_finalized_blocks.len(),
             "newly_finalized_state_roots" => newly_finalized_state_roots.len(),
-            "newly_finalized_blocks_min_slot" => newly_finalized_blocks_min_slot,
             "newly_finalized_states_min_slot" => newly_finalized_states_min_slot,
             "required_finalized_diff_state_slots" => ?required_finalized_diff_state_slots,
             "kept_summaries_for_hdiff" => ?kept_summaries_for_hdiff,
             "state_summaries_count" => state_summaries_dag.summaries_count(),
             "state_summaries_dag_roots" => ?state_summaries_dag_roots,
             "finalized_and_descendant_state_roots_of_finalized_checkpoint" => finalized_and_descendant_state_roots_of_finalized_checkpoint.len(),
-            "finalized_and_descendant_state_roots_of_finalized_checkpoint" => finalized_and_descendant_state_roots_of_finalized_checkpoint.len(),
             "blocks_to_prune" => blocks_to_prune.len(),
             "states_to_prune" => states_to_prune.len(),
         );
         // Don't log the full `states_to_prune` in the log statement above as it can result in a
-        // single log line of +1Kb and break logging setups.
+        // single log line of +1Kb and break logging setups. Log `new_finalized_state_root` as a
+        // prunning ID to trace these individual logs to the above "Extra pruning information"
         for block_root in &blocks_to_prune {
-            debug!(log, "Pruning block"; "block_root" => ?block_root);
+            debug!(
+                log,
+                "Pruning block";
+                "new_finalized_state_root" => ?new_finalized_state_root,
+                "block_root" => ?block_root
+            );
         }
         for (slot, state_root) in &states_to_prune {
-            debug!(log, "Pruning hot state"; "state_root" => ?state_root, "slot" => slot);
+            debug!(
+                log,
+                "Pruning hot state";
+                "new_finalized_state_root" => ?new_finalized_state_root,
+                "state_root" => ?state_root,
+                "slot" => slot
+            );
         }
 
         let mut batch: Vec<StoreOp<E>> = blocks_to_prune
@@ -750,7 +760,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
         store.do_atomically_with_block_and_blobs_cache(batch)?;
 
-        debug!(log, "Database pruning complete");
+        debug!(
+            log,
+            "Database pruning complete";
+            "new_finalized_state_root" => ?new_finalized_state_root,
+        );
 
         Ok(PruningOutcome::Successful {
             // TODO(hdiff): approximation of the previous finalized checkpoint. Only used in the
