@@ -14,7 +14,6 @@ pub mod config;
 pub mod consensus_context;
 pub mod errors;
 mod forwards_iter;
-mod garbage_collection;
 pub mod hdiff;
 pub mod historic_state_cache;
 pub mod hot_cold_store;
@@ -289,8 +288,10 @@ pub enum DBColumn {
     /// Mapping from state root to `ColdStateSummary` in the cold DB.
     #[strum(serialize = "bcs")]
     BeaconColdStateSummary,
-    /// For the list of temporary states stored during block import,
-    /// and then made non-temporary by the deletion of their state root from this column.
+    /// DEPRECATED.
+    ///
+    /// Previously used for the list of temporary states stored during block import, and then made
+    /// non-temporary by the deletion of their state root from this column.
     #[strum(serialize = "bst")]
     BeaconStateTemporary,
     /// Execution payloads for blocks more recent than the finalized checkpoint.
