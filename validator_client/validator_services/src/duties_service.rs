@@ -135,7 +135,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
 ) -> Result<Option<SelectionProof>, Error> {
     let selection_proof = if distributed {
         // Submit a partial selection proof in the data field of the POST HTTP endpoint
-        let selections = BeaconCommitteeSelection {
+        let selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
             selection_proof: validator_store
@@ -146,12 +146,14 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
         };
         // Call the endpoint /eth/v1/validator/beacon_committee_selections
         // The middleware should return a full selection proof here
-        beacon_nodes
+
+        let response = beacon_nodes
             .first_success(|beacon_node| {
-                let value = selections.clone();
+                let selections = selection.clone();
+                println!("Selection proof: {:?}", selections);
                 async move {
                     beacon_node
-                        .post_validator_beacon_committee_selections(&[value])
+                        .post_validator_beacon_committee_selections(&[selections])
                         .await
                 }
             })
@@ -160,7 +162,10 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(e.to_string()))
             })?
             .data[0]
-            .clone()
+            .clone();
+
+        println!("Response: {:?}", response);
+        response
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
