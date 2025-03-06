@@ -152,20 +152,22 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 let selections = selection.clone();
                 println!("Selection proof: {:?}", selections);
                 async move {
-                    beacon_node
+                    let response = beacon_node
                         .post_validator_beacon_committee_selections(&[selections])
-                        .await
+                        .await;
+
+                    println!("Response from middleware {:?}", response);
+
+                    response
                 }
             })
-            .await
+            .await;
+        response
             .map_err(|e| {
                 Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(e.to_string()))
             })?
             .data[0]
-            .clone();
-
-        println!("Response: {:?}", response);
-        response
+            .clone()
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
