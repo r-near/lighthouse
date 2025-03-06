@@ -31,7 +31,6 @@ use store::{
     BlobInfo, DBColumn, HotColdDB, StoreConfig,
 };
 use tempfile::{tempdir, TempDir};
-use tokio::time::sleep;
 use types::test_utils::{SeedableRng, XorShiftRng};
 use types::*;
 
@@ -117,6 +116,17 @@ fn get_harness_generic(
         .build();
     harness.advance_slot();
     harness
+}
+
+fn count_states_descendant_of_block(
+    store: &HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>>,
+    block_root: Hash256,
+) -> usize {
+    let summaries = store.load_hot_state_summaries().unwrap();
+    summaries
+        .iter()
+        .filter(|(_, s)| s.latest_block_root == block_root)
+        .count()
 }
 
 #[tokio::test]
@@ -2137,64 +2147,6 @@ async fn pruning_test(
 }
 
 #[tokio::test]
-async fn garbage_collect_temp_states_from_failed_block_on_startup() {
-    let db_path = tempdir().unwrap();
-
-    // Wrap these functions to ensure the variables are dropped before we try to open another
-    // instance of the store.
-    let mut store = {
-        let store = get_store(&db_path);
-        let harness = get_harness(store.clone(), LOW_VALIDATOR_COUNT);
-
-        let slots_per_epoch = E::slots_per_epoch();
-
-        let genesis_state = harness.get_current_state();
-        let block_slot = Slot::new(2 * slots_per_epoch);
-        let ((signed_block, _), state) = harness.make_block(genesis_state, block_slot).await;
-
-        let (mut block, _) = (*signed_block).clone().deconstruct();
-
-        // Mutate the block to make it invalid, and re-sign it.
-        *block.state_root_mut() = Hash256::repeat_byte(0xff);
-        let proposer_index = block.proposer_index() as usize;
-        let block = Arc::new(block.sign(
-            &harness.validator_keypairs[proposer_index].sk,
-            &state.fork(),
-            state.genesis_validators_root(),
-            &harness.spec,
-        ));
-
-        // The block should be rejected, but should store a bunch of temporary states.
-        harness.set_current_slot(block_slot);
-        harness
-            .process_block_result((block, None))
-            .await
-            .unwrap_err();
-
-        assert_eq!(
-            store.iter_temporary_state_roots().count(),
-            block_slot.as_usize() - 1
-        );
-        store
-    };
-
-    // Wait until all the references to the store have been dropped, this helps ensure we can
-    // re-open the store later.
-    loop {
-        store = if let Err(store_arc) = Arc::try_unwrap(store) {
-            sleep(Duration::from_millis(500)).await;
-            store_arc
-        } else {
-            break;
-        }
-    }
-
-    // On startup, the store should garbage collect all the temporary states.
-    let store = get_store(&db_path);
-    assert_eq!(store.iter_temporary_state_roots().count(), 0);
-}
-
-#[tokio::test]
 async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
     let db_path = tempdir().unwrap();
 
@@ -2208,6 +2160,7 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
     let ((signed_block, _), state) = harness.make_block(genesis_state, block_slot).await;
 
     let (mut block, _) = (*signed_block).clone().deconstruct();
+    let bad_block_parent_root = block.parent_root();
 
     // Mutate the block to make it invalid, and re-sign it.
     *block.state_root_mut() = Hash256::repeat_byte(0xff);
@@ -2226,9 +2179,11 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
         .await
         .unwrap_err();
 
+    // The bad block parent root is the genesis block root. There's `block_slot - 1` temporary
+    // states to remove + the genesis state = block_slot.
     assert_eq!(
-        store.iter_temporary_state_roots().count(),
-        block_slot.as_usize() - 1
+        count_states_descendant_of_block(&store, bad_block_parent_root),
+        block_slot.as_usize(),
     );
 
     // Finalize the chain without the block, which should result in pruning of all temporary states.
@@ -2245,8 +2200,12 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
     // Check that the finalization migration ran.
     assert_ne!(store.get_split_slot(), 0);
 
-    // Check that temporary states have been pruned.
-    assert_eq!(store.iter_temporary_state_roots().count(), 0);
+    // Check that temporary states have been pruned. The genesis block is not a descendant of the
+    // latest finalized checkpoint, so all its states have been pruned from the hot DB, = 0.
+    assert_eq!(
+        count_states_descendant_of_block(&store, bad_block_parent_root),
+        0
+    );
 }
 
 #[tokio::test]

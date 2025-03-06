@@ -14,8 +14,8 @@ use crate::metadata::{
 };
 use crate::state_cache::{PutStateOutcome, StateCache};
 use crate::{
-    get_data_column_key, metrics, parse_data_column_key, BlobSidecarListFromRoot, ColumnKeyIter,
-    DBColumn, DatabaseBlock, Error, ItemStore, KeyValueStore, KeyValueStoreOp, StoreItem, StoreOp,
+    get_data_column_key, metrics, parse_data_column_key, BlobSidecarListFromRoot, DBColumn,
+    DatabaseBlock, Error, ItemStore, KeyValueStoreOp, StoreItem, StoreOp,
 };
 use itertools::{process_results, Itertools};
 use lru::LruCache;
@@ -395,6 +395,12 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
         }
         db.store_config()?;
 
+        // TODO(tree-states): Here we can choose to prune advanced states to reclaim disk space. As
+        // it's a foreground task there's no risk of race condition that can corrupt the DB.
+        // Advanced states for invalid blocks that were never written to the DB, or descendants of
+        // heads can be safely pruned at the expense of potentially having to recompute them in the
+        // future. However this would require a new dedicated pruning routine.
+
         // If configured, run a foreground compaction pass.
         if db.config.compact_on_init {
             info!(db.log, "Running foreground compaction");
@@ -403,12 +409,6 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
         }
 
         Ok(db)
-    }
-
-    /// Return an iterator over the state roots of all temporary states.
-    pub fn iter_temporary_state_roots(&self) -> ColumnKeyIter<Hash256> {
-        self.hot_db
-            .iter_column_keys::<Hash256>(DBColumn::BeaconStateTemporary)
     }
 }
 
