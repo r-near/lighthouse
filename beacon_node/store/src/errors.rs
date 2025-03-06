@@ -26,6 +26,9 @@ pub enum Error {
     SplitPointModified(Slot, Slot),
     ConfigError(StoreConfigError),
     MigrationError(String),
+    /// The store's `anchor_info` is still the default unitialized value when attempting a state
+    /// write
+    AnchorUninitialized,
     /// The store's `anchor_info` was mutated concurrently, the latest modification wasn't applied.
     AnchorInfoConcurrentMutation,
     /// The store's `blob_info` was mutated concurrently, the latest modification wasn't applied.
@@ -47,6 +50,8 @@ pub enum Error {
         expected: Hash256,
         computed: Hash256,
     },
+    MissingState(Hash256),
+    MissingHotStateSummary(Hash256),
     MissingGenesisState,
     MissingSnapshot(Slot),
     BlockReplayError(BlockReplayError),
@@ -75,6 +80,17 @@ pub enum Error {
     MissingBlock(Hash256),
     GenesisStateUnknown,
     ArithError(safe_arith::ArithError),
+    MissmatchDiffBaseStateRoot {
+        expected_slot: Slot,
+        stored_slot: Slot,
+    },
+    LoadAnchorInfo(Box<Error>),
+    LoadSplit(Box<Error>),
+    LoadBlobInfo(Box<Error>),
+    LoadDataColumnInfo(Box<Error>),
+    LoadConfig(Box<Error>),
+    LoadHotStateSummary(Hash256, Box<Error>),
+    LoadHotStateSummaryForSplit(Box<Error>),
 }
 
 pub trait HandleUnavailable<T> {

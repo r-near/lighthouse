@@ -586,11 +586,23 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         let newly_finalized_blocks = state_summaries_dag
             .blocks_of_states(newly_finalized_state_roots.iter())
             .map_err(|e| PruningError::SummariesDagError("blocks of newly finalized", e))?;
+        let newly_finalized_blocks_min_slot = *newly_finalized_blocks
+            .iter()
+            .map(|(_, slot)| slot)
+            .min()
+            .ok_or(PruningError::EmptyFinalizedBlocks)?;
+
+        // Compute the set of finalized state roots that we must keep to make the dynamic HDiff system
+        // work.
+        let required_finalized_diff_state_slots = store
+            .hierarchy_hot
+            .closest_layer_points(new_finalized_slot, store.hot_hdiff_start_slot()?);
 
         // We don't know which blocks are shared among abandoned chains, so we buffer and delete
         // everything in one fell swoop.
         let mut blocks_to_prune: HashSet<Hash256> = HashSet::new();
         let mut states_to_prune: HashSet<(Slot, Hash256)> = HashSet::new();
+        let mut kept_summaries_for_hdiff = vec![];
 
         // Consider the following block tree where we finalize block `[0]` at the checkpoint `(f)`.
         // There's a block `[3]` that descendends from the finalized block but NOT from the
@@ -603,14 +615,38 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         //  \---[3]--|-----------------[4]
         //           |
 
-        for (_, summaries) in state_summaries_dag.summaries_by_slot_ascending() {
-            for (state_root, summary) in summaries {
+        for (slot, summaries) in state_summaries_dag.summaries_by_slot_ascending() {
+            for (state_root, _) in summaries {
                 let should_prune = if finalized_and_descendant_state_roots_of_finalized_checkpoint
                     .contains(&state_root)
                 {
                     // This state is a viable descendant of the finalized checkpoint, so does not
                     // conflict with finality and can be built on or become a head
                     false
+                } else if required_finalized_diff_state_slots.contains(&slot) {
+                    // Keep this state and diff as it's necessary for the finalized portion of the
+                    // HDiff links. `required_finalized_diff_state_slots` tracks the set of slots on
+                    // each diff layer, and by checking `newly_finalized_state_roots` which only
+                    // keep those on the finalized canonical chain. Checking the state root ensures
+                    // we avoid lingering forks.
+
+                    // In the diagram below, `o` are diffs by slot that we must keep. In the prior
+                    // finalized section there's only one chain so we preserve them unconditionally.
+                    // For the newly finalized chain, we check which of is canonical and only keep
+                    // those. Slots below `min_finalized_state_slot` we don't have canonical
+                    // information so we assume they are part of the finalized pruned chain.
+                    //
+                    //                  /-----o----
+                    // o-------o------/-------o----
+                    if slot < newly_finalized_states_min_slot
+                        || newly_finalized_state_roots.contains(&state_root)
+                    {
+                        // Track kept summaries to debug hdiff inconsistencies with "Extra pruning information"
+                        kept_summaries_for_hdiff.push((state_root, slot));
+                        false
+                    } else {
+                        true
+                    }
                 } else {
                     // Everything else, prune
                     true
@@ -619,7 +655,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 if should_prune {
                     // States are migrated into the cold DB in the migrate step. All hot states
                     // prior to finalized can be pruned from the hot DB columns
-                    states_to_prune.insert((summary.slot, state_root));
+                    states_to_prune.insert((slot, state_root));
                 }
             }
         }
@@ -639,7 +675,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             } else if newly_finalized_blocks.contains(&(block_root, slot)) {
                 // Keep recently finalized blocks
                 false
-            } else if slot < newly_finalized_states_min_slot {
+            } else if slot < newly_finalized_blocks_min_slot {
                 // Keep recently finalized blocks that we know are canonical. Blocks with slots <
                 // that `newly_finalized_blocks_min_slot` we don't have canonical information so we
                 // assume they are part of the finalized pruned chain
@@ -668,7 +704,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
             "newly_finalized_blocks" => newly_finalized_blocks.len(),
             "newly_finalized_state_roots" => newly_finalized_state_roots.len(),
+            "newly_finalized_blocks_min_slot" => newly_finalized_blocks_min_slot,
             "newly_finalized_states_min_slot" => newly_finalized_states_min_slot,
+            "required_finalized_diff_state_slots" => ?required_finalized_diff_state_slots,
+            "kept_summaries_for_hdiff" => ?kept_summaries_for_hdiff,
             "state_summaries_count" => state_summaries_dag.summaries_count(),
             "state_summaries_dag_roots" => ?state_summaries_dag_roots,
             "finalized_and_descendant_state_roots_of_finalized_checkpoint" => finalized_and_descendant_state_roots_of_finalized_checkpoint.len(),

@@ -39,8 +39,8 @@ use std::time::Duration;
 use store::{Error as StoreError, HotColdDB, ItemStore, KeyValueStoreOp};
 use task_executor::{ShutdownReason, TaskExecutor};
 use types::{
-    BeaconBlock, BeaconState, BlobSidecarList, ChainSpec, Checkpoint, Epoch, EthSpec,
-    FixedBytesExtended, Hash256, Signature, SignedBeaconBlock, Slot,
+    BeaconBlock, BeaconState, BlobSidecarList, ChainSpec, Epoch, EthSpec, FixedBytesExtended,
+    Hash256, Signature, SignedBeaconBlock, Slot,
 };
 
 /// An empty struct used to "witness" all the `BeaconChainTypes` traits. It has no user-facing
@@ -387,8 +387,21 @@ where
     }
 
     /// Starts a new chain from a genesis state.
-    pub fn genesis_state(mut self, beacon_state: BeaconState<E>) -> Result<Self, String> {
+    pub fn genesis_state(mut self, mut beacon_state: BeaconState<E>) -> Result<Self, String> {
         let store = self.store.clone().ok_or("genesis_state requires a store")?;
+
+        // Initialize anchor info before attempting to write the genesis state
+        let retain_historic_states = self.chain_config.reconstruct_historic_states;
+        let genesis_beacon_block = genesis_block(&mut beacon_state, &self.spec)?;
+        self.pending_io_batch.push(
+            store
+                .init_anchor_info(
+                    genesis_beacon_block.message().parent_root(),
+                    Slot::new(0),
+                    retain_historic_states,
+                )
+                .map_err(|e| format!("Failed to initialize genesis anchor: {:?}", e))?,
+        );
 
         let (genesis, updated_builder) = self.set_genesis_state(beacon_state)?;
         self = updated_builder;
@@ -396,12 +409,6 @@ where
         // Stage the database's metadata fields for atomic storage when `build` is called.
         // Since v4.4.0 we will set the anchor with a dummy state upper limit in order to prevent
         // historic states from being retained (unless `--reconstruct-historic-states` is set).
-        let retain_historic_states = self.chain_config.reconstruct_historic_states;
-        self.pending_io_batch.push(
-            store
-                .init_anchor_info(genesis.beacon_block.message(), retain_historic_states)
-                .map_err(|e| format!("Failed to initialize genesis anchor: {:?}", e))?,
-        );
         self.pending_io_batch.push(
             store
                 .init_blob_info(genesis.beacon_block.slot())
@@ -519,6 +526,14 @@ where
             }
         }
 
+        debug!(
+            log,
+            "Storing split from weak subjectivity state";
+            "slot" => weak_subj_slot,
+            "state_root" => ?weak_subj_state_root,
+            "block_root" => ?weak_subj_block_root,
+        );
+
         // Set the store's split point *before* storing genesis so that genesis is stored
         // immediately in the freezer DB.
         store.set_split(weak_subj_slot, weak_subj_state_root, weak_subj_block_root);
@@ -540,6 +555,19 @@ where
             .do_atomically(block_root_batch)
             .map_err(|e| format!("Error writing frozen block roots: {e:?}"))?;
 
+        // Write the anchor to memory before calling `put_state` otherwise hot hdiff can't store
+        // states that do not align with the start_slot grid
+        let retain_historic_states = self.chain_config.reconstruct_historic_states;
+        self.pending_io_batch.push(
+            store
+                .init_anchor_info(
+                    weak_subj_block.message().parent_root(),
+                    weak_subj_slot,
+                    retain_historic_states,
+                )
+                .map_err(|e| format!("Failed to initialize anchor info: {:?}", e))?,
+        );
+
         // Write the state, block and blobs non-atomically, it doesn't matter if they're forgotten
         // about on a crash restart.
         store
@@ -549,6 +577,8 @@ where
                 weak_subj_state.clone(),
             )
             .map_err(|e| format!("Failed to set checkpoint state as finalized state: {:?}", e))?;
+        // Note: post hot hdiff must update the anchor info before attempting to put_state otherwise
+        // the write will fail if the weak_subj_slot is not aligned with the snapshot moduli.
         store
             .put_state(&weak_subj_state_root, &weak_subj_state)
             .map_err(|e| format!("Failed to store weak subjectivity state: {e:?}"))?;
@@ -585,13 +615,7 @@ where
         // Stage the database's metadata fields for atomic storage when `build` is called.
         // This prevents the database from restarting in an inconsistent state if the anchor
         // info or split point is written before the `PersistedBeaconChain`.
-        let retain_historic_states = self.chain_config.reconstruct_historic_states;
         self.pending_io_batch.push(store.store_split_in_batch());
-        self.pending_io_batch.push(
-            store
-                .init_anchor_info(weak_subj_block.message(), retain_historic_states)
-                .map_err(|e| format!("Failed to initialize anchor info: {:?}", e))?,
-        );
         self.pending_io_batch.push(
             store
                 .init_blob_info(weak_subj_block.slot())
@@ -602,13 +626,6 @@ where
                 .init_data_column_info(weak_subj_block.slot())
                 .map_err(|e| format!("Failed to initialize data column info: {:?}", e))?,
         );
-
-        // Store pruning checkpoint to prevent attempting to prune before the anchor state.
-        self.pending_io_batch
-            .push(store.pruning_checkpoint_store_op(Checkpoint {
-                root: weak_subj_block_root,
-                epoch: weak_subj_state.slot().epoch(E::slots_per_epoch()),
-            }));
 
         let snapshot = BeaconSnapshot {
             beacon_block_root: weak_subj_block_root,
