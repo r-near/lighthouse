@@ -401,9 +401,6 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
         }
         db.store_config()?;
 
-        // Run a garbage collection pass.
-        db.remove_garbage()?;
-
         // If configured, run a foreground compaction pass.
         if db.config.compact_on_init {
             info!(db.log, "Running foreground compaction");

@@ -3719,7 +3719,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             state,
             parent_block,
             parent_eth1_finalization_data,
-            confirmed_state_roots,
             consensus_context,
             data_column_recv,
         } = import_data;
@@ -3744,7 +3743,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                         block,
                         block_root,
                         state,
-                        confirmed_state_roots,
                         payload_verification_outcome.payload_verification_status,
                         parent_block,
                         parent_eth1_finalization_data,
@@ -3783,7 +3781,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         signed_block: AvailableBlock<T::EthSpec>,
         block_root: Hash256,
         mut state: BeaconState<T::EthSpec>,
-        confirmed_state_roots: Vec<Hash256>,
         payload_verification_status: PayloadVerificationStatus,
         parent_block: SignedBlindedBeaconBlock<T::EthSpec>,
         parent_eth1_finalization_data: Eth1FinalizationData,
@@ -3985,11 +3982,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         let block = signed_block.message();
         let db_write_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_DB_WRITE);
-        ops.extend(
-            confirmed_state_roots
-                .into_iter()
-                .map(StoreOp::DeleteStateTemporaryFlag),
-        );
         ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
         ops.push(StoreOp::PutState(block.state_root(), &state));
 
