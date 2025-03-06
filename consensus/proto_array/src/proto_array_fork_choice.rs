@@ -898,6 +898,11 @@ impl ProtoArrayForkChoice {
     pub fn heads_descended_from_finalization<E: EthSpec>(&self) -> Vec<&ProtoNode> {
         self.proto_array.heads_descended_from_finalization::<E>()
     }
+
+    pub fn heads_descended_from_block_root(&self, ancestor_root: Hash256) -> Vec<&ProtoNode> {
+        self.proto_array
+            .heads_descended_from_block_root(ancestor_root)
+    }
 }
 
 /// Returns a list of `deltas`, where there is one delta for each of the indices in

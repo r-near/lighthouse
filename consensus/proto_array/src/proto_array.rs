@@ -1056,6 +1056,15 @@ impl ProtoArray {
             })
             .collect()
     }
+
+    pub fn heads_descended_from_block_root(&self, ancestor_root: Hash256) -> Vec<&ProtoNode> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                node.best_child.is_none() && self.is_descendant(ancestor_root, node.root)
+            })
+            .collect()
+    }
 }
 
 /// A helper method to calculate the proposer boost based on the given `justified_balances`.

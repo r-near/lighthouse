@@ -1411,10 +1411,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// Returns `(block_root, block_slot)`.
     pub fn heads(&self) -> Vec<(Hash256, Slot)> {
+        let split_block_root = self.store.get_split_info().block_root;
         self.canonical_head
             .fork_choice_read_lock()
             .proto_array()
-            .heads_descended_from_finalization::<T::EthSpec>()
+            .heads_descended_from_block_root(split_block_root)
             .iter()
             .map(|node| (node.root, node.slot))
             .collect()

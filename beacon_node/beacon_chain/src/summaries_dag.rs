@@ -114,9 +114,12 @@ impl StateSummariesDAG {
                         ))?;
                     if let Some((state_root, _)) = same_block_root_summaries.get(&previous_slot) {
                         // Skipped slot: block root at previous slot is the same as latest block root.
+                        assert!(summary.block_slot < summary.slot);
                         **state_root
                     } else {
                         // Common case: not a skipped slot.
+                        assert_eq!(summary.block_slot, summary.slot);
+
                         let parent_block_root = summary.block_parent_root;
                         if let Some(parent_block_summaries) =
                             state_summaries_by_block_root.get(&parent_block_root)
