@@ -524,7 +524,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
 
             StateSummariesDAG::new_from_v22(state_summaries)
-                .map_err(|e| PruningError::SummariesDagError("creating StateSumariesDAG", e))?
+                .map_err(|e| PruningError::SummariesDagError("new StateSumariesDAG", e))?
         };
 
         // To debug faulty trees log if we unexpectedly have more than one root. These trees may not
@@ -546,9 +546,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 std::iter::once(new_finalized_state_root).chain(
                     state_summaries_dag
                         .descendants_of(&new_finalized_state_root)
-                        .map_err(|e| {
-                            PruningError::SummariesDagError("state summaries descendants_of", e)
-                        })?,
+                        .map_err(|e| PruningError::SummariesDagError("descendants of", e))?,
                 ),
             );
 
@@ -565,9 +563,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                     // should never error, we just constructed
                     // finalized_and_descendant_state_roots_of_finalized_checkpoint from the
                     // state_summaries_dag
-                    .map_err(|e| {
-                        PruningError::SummariesDagError("state summaries blocks of descendant", e)
-                    })?
+                    .map_err(|e| PruningError::SummariesDagError("blocks of descendant", e))?
                     .into_iter()
                     .map(|(block_root, _)| block_root),
             );
@@ -575,7 +571,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // Note: ancestors_of includes the finalized state root
         let newly_finalized_state_summaries = state_summaries_dag
             .ancestors_of(new_finalized_state_root)
-            .map_err(|e| PruningError::SummariesDagError("state summaries ancestors_of", e))?;
+            .map_err(|e| PruningError::SummariesDagError("ancestors of", e))?;
         let newly_finalized_state_roots = newly_finalized_state_summaries
             .iter()
             .map(|(root, _)| *root)
@@ -589,9 +585,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // Note: ancestors_of includes the finalized block
         let newly_finalized_blocks = state_summaries_dag
             .blocks_of_states(newly_finalized_state_roots.iter())
-            .map_err(|e| {
-                PruningError::SummariesDagError("state summaries blocks of newly finalized", e)
-            })?;
+            .map_err(|e| PruningError::SummariesDagError("blocks of newly finalized", e))?;
 
         // We don't know which blocks are shared among abandoned chains, so we buffer and delete
         // everything in one fell swoop.
