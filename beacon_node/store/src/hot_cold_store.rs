@@ -168,7 +168,6 @@ pub enum HotColdDBError {
         state_root: Hash256,
         requested_by_state_summary: (Hash256, Slot),
     },
-    MissingHotStateSnapshot(Hash256, Slot),
     MissingPrevState(Hash256),
     MissingSplitState(Hash256, Slot),
     MissingHotHDiff(Hash256),
@@ -1062,7 +1061,14 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             state_root
         };
         let mut opt_state = self
-            .load_hot_state(&state_root)?
+            .load_hot_state(&state_root)
+            .map_err(|e| {
+                Error::LoadingHotStateError(
+                    format!("get advanced {block_root} {max_slot}"),
+                    state_root,
+                    e.into(),
+                )
+            })?
             .map(|(state, _block_root)| (state_root, state));
 
         if let Some((state_root, state)) = opt_state.as_mut() {
@@ -1621,7 +1627,13 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         from_root: Hash256,
         ops: &mut Vec<KeyValueStoreOp>,
     ) -> Result<(), Error> {
-        let base_buffer = self.load_hot_hdiff_buffer(from_root)?;
+        let base_buffer = self.load_hot_hdiff_buffer(from_root).map_err(|e| {
+            Error::LoadingHotHdiffBufferError(
+                format!("store state as diff {state_root:?} {}", state.slot()),
+                from_root,
+                e.into(),
+            )
+        })?;
         let target_buffer = HDiffBuffer::from_state(state.clone());
         let diff = HDiff::compute(&base_buffer, &target_buffer, &self.config)?;
         let diff_bytes = diff.as_ssz_bytes();
@@ -1649,7 +1661,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             );
         }
 
-        let state_from_disk = self.load_hot_state(state_root)?;
+        let state_from_disk = self.load_hot_state(state_root).map_err(|e| {
+            Error::LoadingHotStateError("get state".to_owned(), *state_root, e.into())
+        })?;
 
         if let Some((mut state, block_root)) = state_from_disk {
             state.update_tree_hash_cache()?;
@@ -1690,28 +1704,48 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 "requested" => ?state_root,
                 "existing_summaries" => ?existing_summaries,
             );
-            return Err(Error::MissingHotStateSummary(state_root));
+            return Err(Error::MissingHotStateSummary {
+                state_root,
+                existing_summaries,
+            });
         };
 
         match self.hot_storage_strategy(slot)? {
             StorageStrategy::Snapshot => {
                 // FIXME(tree-states): rename error
-                let state = self
-                    .load_hot_state_as_snapshot(state_root)?
-                    .ok_or(HotColdDBError::MissingHotStateSnapshot(state_root, slot))?;
+                let Some(state) = self.load_hot_state_as_snapshot(state_root)? else {
+                    let existing_snapshots = self.load_hot_state_snapshot_roots()?;
+                    return Err(Error::MissingHotStateSnapshot {
+                        state_root,
+                        slot,
+                        existing_snapshots,
+                    });
+                };
                 let buffer = HDiffBuffer::from_state(state);
                 Ok(buffer)
             }
             StorageStrategy::DiffFrom(from_slot) => {
                 let from_state_root = diff_base_state_root.get_root(from_slot)?;
-                let mut buffer = self.load_hot_hdiff_buffer(from_state_root)?;
+                let mut buffer = self.load_hot_hdiff_buffer(from_state_root).map_err(|e| {
+                    Error::LoadingHotHdiffBufferError(
+                        format!("load hdiff DiffFrom {from_slot} {state_root}"),
+                        from_state_root,
+                        e.into(),
+                    )
+                })?;
                 let diff = self.load_hot_hdiff(state_root)?;
                 diff.apply(&mut buffer, &self.config)?;
                 Ok(buffer)
             }
             StorageStrategy::ReplayFrom(from_slot) => {
                 let from_state_root = diff_base_state_root.get_root(from_slot)?;
-                self.load_hot_hdiff_buffer(from_state_root)
+                self.load_hot_hdiff_buffer(from_state_root).map_err(|e| {
+                    Error::LoadingHotHdiffBufferError(
+                        format!("load hdiff ReplayFrom {from_slot} {state_root}"),
+                        from_state_root,
+                        e.into(),
+                    )
+                })
             }
         }
     }
@@ -1757,18 +1791,31 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         {
             let mut state = match self.hot_storage_strategy(slot)? {
                 StorageStrategy::Snapshot | StorageStrategy::DiffFrom(_) => {
-                    let buffer = self.load_hot_hdiff_buffer(*state_root)?;
+                    let buffer = self.load_hot_hdiff_buffer(*state_root).map_err(|e| {
+                        Error::LoadingHotHdiffBufferError(
+                            format!("load state DiffFrom {slot}"),
+                            *state_root,
+                            e.into(),
+                        )
+                    })?;
                     buffer.as_state(&self.spec)?
                 }
                 StorageStrategy::ReplayFrom(from_slot) => {
                     let from_state_root = diff_base_state_root.get_root(from_slot)?;
 
-                    let (mut base_state, _) = self.load_hot_state(&from_state_root)?.ok_or(
-                        HotColdDBError::MissingHotState {
+                    let (mut base_state, _) = self
+                        .load_hot_state(&from_state_root)
+                        .map_err(|e| {
+                            Error::LoadingHotStateError(
+                                format!("load state ReplayFrom {from_slot}"),
+                                *state_root,
+                                e.into(),
+                            )
+                        })?
+                        .ok_or(HotColdDBError::MissingHotState {
                             state_root: from_state_root,
                             requested_by_state_summary: (*state_root, slot),
-                        },
-                    )?;
+                        })?;
 
                     // Immediately rebase the state from disk on the finalized state so that we can
                     // reuse parts of the tree for state root calculation in `replay_blocks`.
@@ -1971,6 +2018,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             .load_hot_state_bytes_as_snapshot(state_root)?
             .map(|bytes| BeaconState::from_ssz_bytes(&bytes, &self.spec))
             .transpose()?)
+    }
+
+    fn load_hot_state_snapshot_roots(&self) -> Result<Vec<Hash256>, Error> {
+        self.hot_db
+            .iter_column_keys::<Hash256>(DBColumn::BeaconStateHotSnapshot)
+            .collect()
     }
 
     pub fn store_cold_state_as_diff(

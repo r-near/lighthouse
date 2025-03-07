@@ -133,7 +133,10 @@ impl Key for Hash256 {
         if key.len() == 32 {
             Ok(Hash256::from_slice(key))
         } else {
-            Err(Error::InvalidKey)
+            Err(Error::InvalidKey(format!(
+                "Hash256 key unexpected len {}",
+                key.len()
+            )))
         }
     }
 }
@@ -165,7 +168,10 @@ pub fn get_data_column_key(block_root: &Hash256, column_index: &ColumnIndex) -> 
 
 pub fn parse_data_column_key(data: Vec<u8>) -> Result<(Hash256, ColumnIndex), Error> {
     if data.len() != DBColumn::BeaconDataColumn.key_size() {
-        return Err(Error::InvalidKey);
+        return Err(Error::InvalidKey(format!(
+            "Unexpected BeaconDataColumn key len {}",
+            data.len()
+        )));
     }
     // split_at panics if 32 < 40 which will never happen after the length check above
     let (block_root_bytes, column_index_bytes) = data.split_at(32);
@@ -174,7 +180,7 @@ pub fn parse_data_column_key(data: Vec<u8>) -> Result<(Hash256, ColumnIndex), Er
     let column_index = ColumnIndex::from_le_bytes(
         column_index_bytes
             .try_into()
-            .map_err(|_| Error::InvalidKey)?,
+            .map_err(|e| Error::InvalidKey(format!("Invalid ColumnIndex {e:?}")))?,
     );
     Ok((block_root, column_index))
 }
