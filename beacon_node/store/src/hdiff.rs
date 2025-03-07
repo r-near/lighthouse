@@ -454,7 +454,9 @@ impl ValidatorsDiff {
                                 Hash256::ZERO
                             },
                             // effective_balance can increase and decrease
-                            effective_balance: y.effective_balance - x.effective_balance,
+                            effective_balance: y
+                                .effective_balance
+                                .wrapping_sub(x.effective_balance),
                             // slashed can only change from false into true. In an index re-use it can
                             // switch back to false, but in that case the pubkey will also change.
                             slashed: y.slashed,
