@@ -172,7 +172,6 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                         // blocks.
                         //
                         // 2. Convert the summary to the new format.
-                        let latest_block_root = old_summary.latest_block_root;
                         let previous_state_root = if state_root == split.state_root {
                             Hash256::ZERO
                         } else {
@@ -203,7 +202,8 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
                         let new_summary = HotStateSummary {
                             slot,
-                            latest_block_root,
+                            latest_block_root: old_summary.latest_block_root,
+                            latest_block_slot: old_summary.latest_block_slot,
                             previous_state_root,
                             diff_base_state_root,
                         };

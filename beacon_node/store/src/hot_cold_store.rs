@@ -3501,6 +3501,7 @@ fn get_ancenstor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E
 pub struct HotStateSummary {
     pub slot: Slot,
     pub latest_block_root: Hash256,
+    pub latest_block_slot: Slot,
     // FIXME(tree-states): consider not storing the storage strategy and storing a state root instead
     pub diff_base_state_root: DiffBaseStateRoot,
     // FIXME(tree-states): should add this as part of this migration
@@ -3583,6 +3584,7 @@ impl HotStateSummary {
         Ok(HotStateSummary {
             slot: state.slot(),
             latest_block_root,
+            latest_block_slot: state.latest_block_header().slot,
             diff_base_state_root,
             // Note: if genesis state, it will point to its own state root
             previous_state_root: get_state_root(state.slot().saturating_sub(1_u64))?,

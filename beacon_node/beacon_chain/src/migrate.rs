@@ -1,5 +1,5 @@
 use crate::errors::BeaconChainError;
-use crate::summaries_dag::{DAGStateSummaryV22, Error as SummariesDagError, StateSummariesDAG};
+use crate::summaries_dag::{DAGStateSummary, Error as SummariesDagError, StateSummariesDAG};
 use parking_lot::Mutex;
 use slog::{debug, error, info, warn, Logger};
 use std::collections::HashSet;
@@ -490,32 +490,23 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 .load_hot_state_summaries()?
                 .into_iter()
                 .map(|(state_root, summary)| {
-                    let block_root = summary.latest_block_root;
-                    // This error should never happen unless we break a DB invariant
-                    let block = store
-                        .get_blinded_block(&block_root)?
-                        .ok_or(PruningError::MissingBlindedBlock(block_root))?;
-                    Ok((
+                    (
                         state_root,
-                        DAGStateSummaryV22 {
+                        DAGStateSummary {
                             slot: summary.slot,
                             latest_block_root: summary.latest_block_root,
-                            block_slot: block.slot(),
-                            block_parent_root: block.parent_root(),
+                            latest_block_slot: summary.latest_block_slot,
+                            previous_state_root: summary.previous_state_root,
                         },
-                    ))
+                    )
                 })
-                .collect::<Result<Vec<(Hash256, DAGStateSummaryV22)>, BeaconChainError>>()?;
-
-            // De-duplicate block roots to reduce block reads below
-            let summary_block_roots = HashSet::<Hash256>::from_iter(
-                state_summaries
-                    .iter()
-                    .map(|(_, summary)| summary.latest_block_root),
-            );
+                .collect::<Vec<(Hash256, DAGStateSummary)>>();
 
             // Sanity check, there is at least one summary with the new finalized block root
-            if !summary_block_roots.contains(&new_finalized_checkpoint.root) {
+            if !state_summaries
+                .iter()
+                .any(|(_, s)| s.latest_block_root == new_finalized_checkpoint.root)
+            {
                 return Err(BeaconChainError::PruningError(
                     PruningError::MissingSummaryForFinalizedCheckpoint(
                         new_finalized_checkpoint.root,
@@ -523,7 +514,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 ));
             }
 
-            StateSummariesDAG::new_from_v22(state_summaries)
+            StateSummariesDAG::new(state_summaries)
                 .map_err(|e| PruningError::SummariesDagError("new StateSumariesDAG", e))?
         };
 
