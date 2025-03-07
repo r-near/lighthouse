@@ -949,6 +949,7 @@ pub struct PeerCount {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "")]
 pub struct BeaconCommitteeSelection {
     #[serde(with = "serde_utils::quoted_u64")]
     pub validator_index: u64,
