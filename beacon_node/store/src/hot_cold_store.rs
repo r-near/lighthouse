@@ -13,8 +13,8 @@ use crate::metadata::{
 };
 use crate::state_cache::{PutStateOutcome, StateCache};
 use crate::{
-    get_data_column_key, get_key_for_col, metrics, parse_data_column_key, BlobSidecarListFromRoot,
-    DBColumn, DatabaseBlock, Error, ItemStore, KeyValueStoreOp, StoreItem, StoreOp,
+    get_data_column_key, metrics, parse_data_column_key, BlobSidecarListFromRoot, DBColumn,
+    DatabaseBlock, Error, ItemStore, KeyValueStoreOp, StoreItem, StoreOp,
 };
 use itertools::{process_results, Itertools};
 use lru::LruCache;
@@ -1259,11 +1259,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
                 StoreOp::DeleteState(state_root, slot) => {
                     // Delete the hot state summary.
-                    let state_summary_key =
-                        get_key_for_col(DBColumn::BeaconStateHotSummary, state_root.as_slice());
                     key_value_batch.push(KeyValueStoreOp::DeleteKey(
                         DBColumn::BeaconStateHotSummary,
-                        state_summary_key,
+                        state_root.as_slice().to_vec(),
                     ));
 
                     // Delete the state temporary flag (if any). Temporary flags are commonly
@@ -1279,20 +1277,14 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                                 // Full state stored in this position
                                 key_value_batch.push(KeyValueStoreOp::DeleteKey(
                                     DBColumn::BeaconStateHotSnapshot,
-                                    get_key_for_col(
-                                        DBColumn::BeaconStateHotSnapshot,
-                                        state_root.as_slice(),
-                                    ),
+                                    state_root.as_slice().to_vec(),
                                 ));
                             }
                             StorageStrategy::DiffFrom(_) => {
                                 // Diff stored in this position
                                 key_value_batch.push(KeyValueStoreOp::DeleteKey(
                                     DBColumn::BeaconStateHotDiff,
-                                    get_key_for_col(
-                                        DBColumn::BeaconStateHotDiff,
-                                        state_root.as_slice(),
-                                    ),
+                                    state_root.as_slice().to_vec(),
                                 ));
                             }
                             StorageStrategy::ReplayFrom(_) => {
@@ -1303,14 +1295,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                         // TODO(hdiff): should attempt to delete everything if slot is not available?
                         key_value_batch.push(KeyValueStoreOp::DeleteKey(
                             DBColumn::BeaconStateHotSnapshot,
-                            get_key_for_col(
-                                DBColumn::BeaconStateHotSnapshot,
-                                state_root.as_slice(),
-                            ),
+                            state_root.as_slice().to_vec(),
                         ));
                         key_value_batch.push(KeyValueStoreOp::DeleteKey(
                             DBColumn::BeaconStateHotDiff,
-                            get_key_for_col(DBColumn::BeaconStateHotDiff, state_root.as_slice()),
+                            state_root.as_slice().to_vec(),
                         ));
                     }
                 }
@@ -1581,35 +1570,22 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         ops: &mut Vec<KeyValueStoreOp>,
     ) -> Result<(), Error> {
         let slot = state.slot();
-        match self.hot_storage_strategy(slot)? {
-            StorageStrategy::ReplayFrom(from_slot) => {
-                debug!(
-                    self.log,
-                    "Storing hot state";
-                    "strategy" => "replay",
-                    "from_slot" => from_slot,
-                    "slot" => slot,
-                );
+        let storage_strategy = self.hot_storage_strategy(slot)?;
+        debug!(
+            self.log,
+            "Storing hot state";
+            "state_root" => ?state_root,
+            "state_slot" => slot,
+            "strategy" => ?storage_strategy,
+        );
+        match storage_strategy {
+            StorageStrategy::ReplayFrom(_) => {
                 // Already have persisted the state summary, don't persist anything else
             }
             StorageStrategy::Snapshot => {
-                debug!(
-                    self.log,
-                    "Storing hot state";
-                    "strategy" => "snapshot",
-                    "slot" => slot,
-                );
                 self.store_hot_state_as_snapshot(state_root, state, ops)?;
             }
             StorageStrategy::DiffFrom(from_slot) => {
-                debug!(
-                    self.log,
-                    "Storing hot state";
-                    "strategy" => "diff",
-                    "from_slot" => from_slot,
-                    "slot" => slot,
-                );
-
                 let from_root = get_ancenstor_state_root(self, state, from_slot)?.ok_or(
                     HotColdDBError::HdiffGetPriorStateRootError(state.slot(), from_slot),
                 )?;
@@ -1637,10 +1613,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         let target_buffer = HDiffBuffer::from_state(state.clone());
         let diff = HDiff::compute(&base_buffer, &target_buffer, &self.config)?;
         let diff_bytes = diff.as_ssz_bytes();
-        let key = get_key_for_col(DBColumn::BeaconStateHotDiff, state_root.as_slice());
         ops.push(KeyValueStoreOp::PutKeyValue(
             DBColumn::BeaconStateHotDiff,
-            key,
+            state_root.as_slice().to_vec(),
             diff_bytes,
         ));
         Ok(())
@@ -1971,10 +1946,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             out
         };
 
-        let key = get_key_for_col(DBColumn::BeaconStateHotSnapshot, state_root.as_slice());
         ops.push(KeyValueStoreOp::PutKeyValue(
             DBColumn::BeaconStateHotSnapshot,
-            key,
+            state_root.as_slice().to_vec(),
             compressed_value,
         ));
         Ok(())
