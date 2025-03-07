@@ -8,7 +8,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::{migrate_database, HotColdDBError};
-use store::{Error, ItemStore, StoreOp};
+use store::{Error, ItemStore, Split, StoreOp};
 pub use store::{HotColdDB, MemoryStore};
 use types::{BeaconState, BeaconStateHash, Checkpoint, Epoch, EthSpec, Hash256, Slot};
 
@@ -319,19 +319,24 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
         };
 
-        match migrate_database(
+        let split_prior_to_migration = match migrate_database(
             db.clone(),
             finalized_state_root.into(),
             finalized_block_root,
             &finalized_state,
         ) {
-            Ok(()) => {}
+            Ok(split_change) => {
+                // Migration run, return the split before the migration
+                split_change.previous
+            }
             Err(Error::HotColdDBError(HotColdDBError::FreezeSlotUnaligned(slot))) => {
                 debug!(
                     log,
                     "Database migration postponed, unaligned finalized block";
                     "slot" => slot.as_u64()
                 );
+                // Migration did not run, return the current split info
+                db.get_split_info()
             }
             Err(e) => {
                 warn!(
@@ -348,6 +353,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             finalized_state_root.into(),
             &finalized_state,
             notif.finalized_checkpoint,
+            split_prior_to_migration,
             log,
         ) {
             Ok(PruningOutcome::Successful {
@@ -457,6 +463,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         new_finalized_state_root: Hash256,
         new_finalized_state: &BeaconState<E>,
         new_finalized_checkpoint: Checkpoint,
+        split_prior_to_migration: Split,
         log: &Logger,
     ) -> Result<PruningOutcome, BeaconChainError> {
         let new_finalized_slot = new_finalized_checkpoint
@@ -483,6 +490,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "Starting database pruning";
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
             "new_finalized_state_root" => ?new_finalized_state_root,
+            "split_prior_to_migration" => ?split_prior_to_migration,
         );
 
         let state_summaries_dag = {
@@ -521,13 +529,21 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // To debug faulty trees log if we unexpectedly have more than one root. These trees may not
         // result in an error, as they may not be queried in the codepaths below.
         let state_summaries_dag_roots = state_summaries_dag.tree_roots();
-        if state_summaries_dag_roots.len() > 1 {
+        let state_summaries_dag_roots_post_split = state_summaries_dag_roots
+            .iter()
+            .filter(|(_, s)| s.slot >= split_prior_to_migration.slot)
+            .collect::<Vec<_>>();
+        // Because of the additional HDiffs kept for the grid prior to finalization the tree_roots
+        // function will consider them roots. Those are expected. We just want to assert that the
+        // relevant tree of states (post-split) is well-formed.
+        if state_summaries_dag_roots_post_split.len() > 1 {
             warn!(
                 log,
                 "State summaries DAG found more than one root";
                 "location" => "pruning",
                 "new_finalized_state_root" => ?new_finalized_state_root,
-                "state_summaries_dag_roots" => ?state_summaries_dag_roots
+                "split_prior_to_migration_slot" => split_prior_to_migration.slot,
+                "state_summaries_dag_roots_post_split" => ?state_summaries_dag_roots_post_split
             );
         }
 
@@ -693,6 +709,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             "Extra pruning information";
             "new_finalized_checkpoint" => ?new_finalized_checkpoint,
             "new_finalized_state_root" => ?new_finalized_state_root,
+            "split_prior_to_migration" => ?split_prior_to_migration,
             "newly_finalized_blocks" => newly_finalized_blocks.len(),
             "newly_finalized_state_roots" => newly_finalized_state_roots.len(),
             "newly_finalized_states_min_slot" => newly_finalized_states_min_slot,

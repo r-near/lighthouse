@@ -3302,7 +3302,7 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     finalized_state_root: Hash256,
     finalized_block_root: Hash256,
     finalized_state: &BeaconState<E>,
-) -> Result<(), Error> {
+) -> Result<SplitChange, Error> {
     debug!(
         store.log,
         "Freezer migration started";
@@ -3312,12 +3312,12 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     // 0. Check that the migration is sensible.
     // The new finalized state must increase the current split slot, and lie on an epoch
     // boundary (in order for the hot state summary scheme to work).
-    let current_split_slot = store.split.read_recursive().slot;
+    let current_split = *store.split.read_recursive();
     let anchor_info = store.anchor_info.read_recursive().clone();
 
-    if finalized_state.slot() < current_split_slot {
+    if finalized_state.slot() < current_split.slot {
         return Err(HotColdDBError::FreezeSlotError {
-            current_split_slot,
+            current_split_slot: current_split.slot,
             proposed_split_slot: finalized_state.slot(),
         }
         .into());
@@ -3334,7 +3334,7 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     // Iterate in descending order until the current split slot
     let state_roots: Vec<_> =
         process_results(RootsIterator::new(&store, finalized_state), |iter| {
-            iter.take_while(|(_, _, slot)| *slot >= current_split_slot)
+            iter.take_while(|(_, _, slot)| *slot >= current_split.slot)
                 .collect()
         })?;
 
@@ -3392,41 +3392,42 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     // in the worst case we will restart with the old split and re-run the migration.
     store.cold_db.do_atomically(cold_db_block_ops)?;
     store.cold_db.sync()?;
-    {
+    let new_split = {
         let mut split_guard = store.split.write();
-        let latest_split_slot = split_guard.slot;
+        let latest_split = *split_guard;
 
         // Detect a situation where the split point is (erroneously) changed from more than one
         // place in code.
-        if latest_split_slot != current_split_slot {
+        if latest_split.slot != current_split.slot {
             error!(
                 store.log,
                 "Race condition detected: Split point changed while copying states to the freezer";
-                "previous split slot" => current_split_slot,
-                "current split slot" => latest_split_slot,
+                "previous split slot" => current_split.slot,
+                "current split slot" => latest_split.slot,
             );
 
             // Assume the freezing procedure will be retried in case this happens.
             return Err(Error::SplitPointModified(
-                current_split_slot,
-                latest_split_slot,
+                current_split.slot,
+                latest_split.slot,
             ));
         }
 
         // Before updating the in-memory split value, we flush it to disk first, so that should the
         // OS process die at this point, we pick up from the right place after a restart.
-        let split = Split {
+        let new_split = Split {
             slot: finalized_state.slot(),
             state_root: finalized_state_root,
             block_root: finalized_block_root,
         };
-        store.hot_db.put_sync(&SPLIT_KEY, &split)?;
+        store.hot_db.put_sync(&SPLIT_KEY, &new_split)?;
 
         // Split point is now persisted in the hot database on disk. The in-memory split point
         // hasn't been modified elsewhere since we keep a write lock on it. It's safe to update
         // the in-memory split point now.
-        *split_guard = split;
-    }
+        *split_guard = new_split;
+        new_split
+    };
 
     // Update the cache's view of the finalized state.
     store.update_finalized_state(
@@ -3441,7 +3442,16 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
         "slot" => finalized_state.slot()
     );
 
-    Ok(())
+    Ok(SplitChange {
+        previous: current_split,
+        new: new_split,
+    })
+}
+
+#[derive(Debug)]
+pub struct SplitChange {
+    pub previous: Split,
+    pub new: Split,
 }
 
 /// Struct for storing the split slot and state root in the database.
