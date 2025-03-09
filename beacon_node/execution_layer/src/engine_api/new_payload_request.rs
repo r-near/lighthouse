@@ -47,7 +47,7 @@ pub struct NewPayloadRequest<'block, E: EthSpec> {
     pub parent_beacon_block_root: Hash256,
     #[superstruct(only(Electra, Fulu))]
     pub execution_requests: &'block ExecutionRequests<E>,
-    #[superstruct(only(Electra, Fulu))]
+    #[superstruct(only(Fulu))]
     pub il_transactions: InclusionListTransactions<E>,
 }
 
@@ -204,7 +204,6 @@ impl<'a, E: EthSpec> NewPayloadRequest<'a, E> {
                     .collect(),
                 parent_beacon_block_root: block_ref.parent_root,
                 execution_requests: &block_ref.body.execution_requests,
-                il_transactions,
             })),
             BeaconBlockRef::Fulu(block_ref) => Ok(Self::Fulu(NewPayloadRequestFulu {
                 execution_payload: &block_ref.body.execution_payload.execution_payload,
@@ -259,7 +258,6 @@ impl<'a, E: EthSpec> TryFrom<BeaconBlockRef<'a, E>> for NewPayloadRequest<'a, E>
                     .collect(),
                 parent_beacon_block_root: block_ref.parent_root,
                 execution_requests: &block_ref.body.execution_requests,
-                il_transactions: vec![].into(),
             })),
             BeaconBlockRef::Fulu(block_ref) => Ok(Self::Fulu(NewPayloadRequestFulu {
                 execution_payload: &block_ref.body.execution_payload.execution_payload,

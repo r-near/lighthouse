@@ -193,7 +193,7 @@ fn verify_and_publish_inclusion_list<T: BeaconChainTypes>(
     inclusion_list: &SignedInclusionList<T::EthSpec>,
     seen_timestamp: Duration,
     network_tx: &UnboundedSender<NetworkMessage<T::EthSpec>>,
-    _log: &Logger,
+    log: &Logger,
 ) -> Result<(), Error> {
     let verified_inclusion_list = chain
         .verify_inclusion_list_for_gossip(inclusion_list)
@@ -206,6 +206,12 @@ fn verify_and_publish_inclusion_list<T: BeaconChainTypes>(
             ))],
         })
         .map_err(|_| Error::Publication)?;
+
+    info!(
+        log,
+        "Published inclusion list";
+        "slot" => verified_inclusion_list.signed_il.message.slot
+    );
 
     // TODO(focil) add reprocess logic?
 

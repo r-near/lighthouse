@@ -1402,10 +1402,10 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
         local_pubkeys
             .iter()
             .filter(|pubkey| {
-                inclusion_list_duties.get(pubkey).map_or(true, |duties| {
+                inclusion_list_duties.get(pubkey).is_none_or(|duties| {
                     duties
                         .get(&epoch)
-                        .map_or(true, |(prior, _)| *prior != dependent_root)
+                        .is_none_or(|(prior, _)| *prior != dependent_root)
                 })
             })
             .collect::<Vec<_>>()

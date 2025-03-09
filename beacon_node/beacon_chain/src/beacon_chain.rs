@@ -7399,7 +7399,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     }
 
     pub fn on_verified_inclusion_list(&self, signed_il: SignedInclusionList<T::EthSpec>) {
-        debug!(self.log, "Adding verified inclusion list to the cache");
+        info!(self.log, "Adding verified inclusion list to the cache");
         self.inclusion_list_cache
             .write()
             .on_inclusion_list(signed_il, &self.log);
