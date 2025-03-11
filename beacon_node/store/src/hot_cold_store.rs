@@ -1271,7 +1271,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                         state_root.as_slice().to_vec(),
                     ));
 
-<<<<<<< HEAD
                     if let Some(slot) = slot {
                         match self.hot_storage_strategy(slot)? {
                             StorageStrategy::Snapshot => {
@@ -1294,9 +1293,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                         }
                     } else {
                         // TODO(hdiff): should attempt to delete everything if slot is not available?
-=======
-                    if slot.is_none_or(|slot| slot % E::slots_per_epoch() == 0) {
->>>>>>> origin/drop-headtracker
                         key_value_batch.push(KeyValueStoreOp::DeleteKey(
                             DBColumn::BeaconStateHotSnapshot,
                             state_root.as_slice().to_vec(),
