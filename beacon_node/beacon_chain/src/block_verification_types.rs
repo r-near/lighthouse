@@ -7,11 +7,10 @@ use derivative::Derivative;
 use state_processing::ConsensusContext;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tokio::sync::oneshot;
 use types::blob_sidecar::BlobIdentifier;
 use types::{
-    BeaconBlockRef, BeaconState, BlindedPayload, BlobSidecarList, ChainSpec, DataColumnSidecarList,
-    Epoch, EthSpec, Hash256, RuntimeVariableList, SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
+    BeaconBlockRef, BeaconState, BlindedPayload, BlobSidecarList, ChainSpec, Epoch, EthSpec,
+    Hash256, RuntimeVariableList, SignedBeaconBlock, SignedBeaconBlockHeader, Slot,
 };
 
 /// A block that has been received over RPC. It has 2 internal variants:
@@ -265,7 +264,6 @@ impl<E: EthSpec> ExecutedBlock<E> {
 
 /// A block that has completed all pre-deneb block processing checks including verification
 /// by an EL client **and** has all requisite blob data to be imported into fork choice.
-#[derive(PartialEq)]
 pub struct AvailableExecutedBlock<E: EthSpec> {
     pub block: AvailableBlock<E>,
     pub import_data: BlockImportData<E>,
@@ -338,20 +336,13 @@ impl<E: EthSpec> AvailabilityPendingExecutedBlock<E> {
     }
 }
 
-#[derive(Debug, Derivative)]
-#[derivative(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct BlockImportData<E: EthSpec> {
     pub block_root: Hash256,
     pub state: BeaconState<E>,
     pub parent_block: SignedBeaconBlock<E, BlindedPayload<E>>,
     pub parent_eth1_finalization_data: Eth1FinalizationData,
     pub consensus_context: ConsensusContext<E>,
-    #[derivative(PartialEq = "ignore")]
-    /// An optional receiver for `DataColumnSidecarList`.
-    ///
-    /// This field is `Some` when data columns are being computed asynchronously.
-    /// The resulting `DataColumnSidecarList` will be sent through this receiver.
-    pub data_column_recv: Option<oneshot::Receiver<DataColumnSidecarList<E>>>,
 }
 
 impl<E: EthSpec> BlockImportData<E> {
@@ -369,7 +360,6 @@ impl<E: EthSpec> BlockImportData<E> {
                 eth1_deposit_index: 0,
             },
             consensus_context: ConsensusContext::new(Slot::new(0)),
-            data_column_recv: None,
         }
     }
 }

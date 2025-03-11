@@ -779,6 +779,7 @@ where
                 SensitiveUrl::parse(format!("http://127.0.0.1:{port}").as_str()).unwrap(),
                 None,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2734,16 +2735,16 @@ where
         let mut block_hash_from_slot: HashMap<Slot, SignedBeaconBlockHash> = HashMap::new();
         let mut state_hash_from_slot: HashMap<Slot, BeaconStateHash> = HashMap::new();
         for slot in slots {
-            let (block_hash, new_state) = self
-                .add_attested_block_at_slot_with_sync(
-                    *slot,
-                    state,
-                    state_root,
-                    validators,
-                    sync_committee_strategy,
-                )
-                .await
-                .unwrap();
+            // Using a `Box::pin` to reduce the stack size. Clippy was raising a lints.
+            let (block_hash, new_state) = Box::pin(self.add_attested_block_at_slot_with_sync(
+                *slot,
+                state,
+                state_root,
+                validators,
+                sync_committee_strategy,
+            ))
+            .await
+            .unwrap();
 
             state = new_state;
 
