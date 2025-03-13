@@ -894,26 +894,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
     /// Store a state in the store.
     pub fn put_state(&self, state_root: &Hash256, state: &BeaconState<E>) -> Result<(), Error> {
-        self.put_state_possibly_temporary(state_root, state, false)
-    }
-
-    /// Store a state in the store.
-    ///
-    /// The `temporary` flag indicates whether this state should be considered canonical.
-    pub fn put_state_possibly_temporary(
-        &self,
-        state_root: &Hash256,
-        state: &BeaconState<E>,
-        temporary: bool,
-    ) -> Result<(), Error> {
         let mut ops: Vec<KeyValueStoreOp> = Vec::new();
         if state.slot() < self.get_split_slot() {
             self.store_cold_state(state_root, state, &mut ops)?;
             self.cold_db.do_atomically(ops)
         } else {
-            if temporary {
-                ops.push(TemporaryFlag.as_kv_store_op(*state_root));
-            }
             self.store_hot_state(state_root, state, &mut ops)?;
             self.hot_db.do_atomically(ops)
         }
@@ -1181,17 +1166,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                     key_value_batch.push(summary.as_kv_store_op(state_root));
                 }
 
-                StoreOp::PutStateTemporaryFlag(state_root) => {
-                    key_value_batch.push(TemporaryFlag.as_kv_store_op(state_root));
-                }
-
-                StoreOp::DeleteStateTemporaryFlag(state_root) => {
-                    key_value_batch.push(KeyValueStoreOp::DeleteKey(
-                        TemporaryFlag::db_column(),
-                        state_root.as_slice().to_vec(),
-                    ));
-                }
-
                 StoreOp::DeleteBlock(block_root) => {
                     key_value_batch.push(KeyValueStoreOp::DeleteKey(
                         DBColumn::BeaconBlock,
@@ -1218,13 +1192,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                     // Delete the hot state summary.
                     key_value_batch.push(KeyValueStoreOp::DeleteKey(
                         DBColumn::BeaconStateSummary,
-                        state_root.as_slice().to_vec(),
-                    ));
-
-                    // Delete the state temporary flag (if any). Temporary flags are commonly
-                    // created by the state advance routine.
-                    key_value_batch.push(KeyValueStoreOp::DeleteKey(
-                        DBColumn::BeaconStateTemporary,
                         state_root.as_slice().to_vec(),
                     ));
 
@@ -1388,10 +1355,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
                 StoreOp::PutStateSummary(_, _) => (),
 
-                StoreOp::PutStateTemporaryFlag(_) => (),
-
-                StoreOp::DeleteStateTemporaryFlag(_) => (),
-
                 StoreOp::DeleteBlock(block_root) => {
                     guard.delete_block(&block_root);
                     self.state_cache.lock().delete_block_states(&block_root);
@@ -1522,12 +1485,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         state_root: &Hash256,
     ) -> Result<Option<(BeaconState<E>, Hash256)>, Error> {
         metrics::inc_counter(&metrics::BEACON_STATE_HOT_GET_COUNT);
-
-        // If the state is marked as temporary, do not return it. It will become visible
-        // only once its transaction commits and deletes its temporary flag.
-        if self.load_state_temporary_flag(state_root)?.is_some() {
-            return Ok(None);
-        }
 
         if let Some(HotStateSummary {
             slot,
@@ -2509,17 +2466,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             .collect()
     }
 
-    /// Load the temporary flag for a state root, if one exists.
-    ///
-    /// Returns `Some` if the state is temporary, or `None` if the state is permanent or does not
-    /// exist -- you should call `load_hot_state_summary` to find out which.
-    pub fn load_state_temporary_flag(
-        &self,
-        state_root: &Hash256,
-    ) -> Result<Option<TemporaryFlag>, Error> {
-        self.hot_db.get(state_root)
-    }
-
     /// Run a compaction pass to free up space used by deleted states.
     pub fn compact(&self) -> Result<(), Error> {
         self.hot_db.compact()?;
@@ -2944,51 +2890,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
         Ok(())
     }
-
-    /// Prune states from the hot database which are prior to the split.
-    ///
-    /// This routine is important for cleaning up advanced states which are stored in the database
-    /// with a temporary flag.
-    pub fn prune_old_hot_states(&self) -> Result<(), Error> {
-        let split = self.get_split_info();
-        debug!(
-            %split.slot,
-            "Database state pruning started"
-        );
-        let mut state_delete_batch = vec![];
-        for res in self
-            .hot_db
-            .iter_column::<Hash256>(DBColumn::BeaconStateSummary)
-        {
-            let (state_root, summary_bytes) = res?;
-            let summary = HotStateSummary::from_ssz_bytes(&summary_bytes)?;
-
-            if summary.slot <= split.slot {
-                let old = summary.slot < split.slot;
-                let non_canonical = summary.slot == split.slot
-                    && state_root != split.state_root
-                    && !split.state_root.is_zero();
-                if old || non_canonical {
-                    let reason = if old {
-                        "old dangling state"
-                    } else {
-                        "non-canonical"
-                    };
-                    debug!(
-                        ?state_root,
-                        slot = %summary.slot,
-                        %reason,
-                        "Deleting state"
-                    );
-                    state_delete_batch.push(StoreOp::DeleteState(state_root, Some(summary.slot)));
-                }
-            }
-        }
-        let num_deleted_states = state_delete_batch.len();
-        self.do_atomically_with_block_and_blobs_cache(state_delete_batch)?;
-        debug!(%num_deleted_states, "Database state pruning complete");
-        Ok(())
-    }
 }
 
 /// Advance the split point of the store, copying new finalized states to the freezer.
@@ -3237,23 +3138,6 @@ impl StoreItem for ColdStateSummary {
 
     fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
         Ok(Self::from_ssz_bytes(bytes)?)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TemporaryFlag;
-
-impl StoreItem for TemporaryFlag {
-    fn db_column() -> DBColumn {
-        DBColumn::BeaconStateTemporary
-    }
-
-    fn as_store_bytes(&self) -> Vec<u8> {
-        vec![]
-    }
-
-    fn from_store_bytes(_: &[u8]) -> Result<Self, Error> {
-        Ok(TemporaryFlag)
     }
 }
 
