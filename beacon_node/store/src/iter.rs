@@ -381,8 +381,7 @@ mod test {
     use super::*;
     use crate::{MemoryStore, StoreConfig as Config};
     use beacon_chain::test_utils::BeaconChainHarness;
-    use beacon_chain::types::{ChainSpec, MainnetEthSpec};
-    use logging::test_logger;
+    use beacon_chain::types::MainnetEthSpec;
     use std::sync::Arc;
     use types::FixedBytesExtended;
 
@@ -397,10 +396,8 @@ mod test {
     }
 
     fn get_store<E: EthSpec>() -> HotColdDB<E, MemoryStore<E>, MemoryStore<E>> {
-        let log = test_logger();
         let store =
-            HotColdDB::open_ephemeral(Config::default(), Arc::new(ChainSpec::minimal()), log)
-                .unwrap();
+            HotColdDB::open_ephemeral(Config::default(), Arc::new(E::default_spec())).unwrap();
         // Init achor info so anchor slot is set. Use a random block as it is only used for the
         // parent_root
         let _ = store

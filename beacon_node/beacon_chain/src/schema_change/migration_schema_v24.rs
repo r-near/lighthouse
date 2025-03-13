@@ -2,7 +2,6 @@ use crate::{
     beacon_chain::BeaconChainTypes,
     summaries_dag::{DAGStateSummaryV22, StateSummariesDAG},
 };
-use slog::{debug, info, warn, Logger};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
 use std::{
@@ -13,6 +12,7 @@ use store::{
     get_full_state_v22, hdiff::StorageStrategy, hot_cold_store::DiffBaseStateRoot, DBColumn, Error,
     HotColdDB, HotStateSummary, KeyValueStore, KeyValueStoreOp, StoreItem,
 };
+use tracing::{debug, info, warn};
 use types::{EthSpec, Hash256, Slot};
 
 #[derive(Debug, Clone, Copy, Encode, Decode)]
@@ -24,7 +24,6 @@ pub struct HotStateSummaryV22 {
 
 pub fn upgrade_to_v24<T: BeaconChainTypes>(
     db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
-    log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
     let mut migrate_ops = vec![];
     let split = db.get_split_info();
@@ -70,19 +69,17 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
             state_summaries_dag_roots.first().expect("len == 1");
         if *root_summary_state_root != split.state_root {
             warn!(
-                log,
-                "State summaries DAG root is not the split";
-                "root_summary_state_root" => ?root_summary_state_root,
-                "root_summary" => ?root_summary,
-                "split" => ?split,
+                ?root_summary_state_root,
+                ?root_summary,
+                ?split,
+                "State summaries DAG root is not the split"
             );
         }
     } else {
         warn!(
-            log,
-            "State summaries DAG found more than one root";
-            "location" => "migration",
-            "state_summaries_dag_roots" => ?state_summaries_dag_roots
+            location = "migration",
+            state_summaries_dag_roots = ?state_summaries_dag_roots,
+            "State summaries DAG found more than one root"
         );
     }
 
@@ -93,15 +90,14 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     // summaries we may get distance state of each iteration.
     let summaries_by_slot = state_summaries_dag.summaries_by_slot_ascending();
     debug!(
-        log,
-        "Starting hot states migration";
-        "summaries_count" => state_summaries_dag.summaries_count(),
-        "slots_count" => summaries_by_slot.len(),
-        "min_slot" => ?summaries_by_slot.first_key_value().map(|(slot, _)| slot),
-        "max_slot" => ?summaries_by_slot.last_key_value().map(|(slot, _)| slot),
-        "state_summaries_dag_roots" => ?state_summaries_dag_roots,
-        "hot_hdiff_start_slot" => hot_hdiff_start_slot,
-        "split_state_root" => ?split.state_root,
+        summaries_count = state_summaries_dag.summaries_count(),
+        slots_count = summaries_by_slot.len(),
+        min_slot = ?summaries_by_slot.first_key_value().map(|(slot, _)| slot),
+        max_slot = ?summaries_by_slot.last_key_value().map(|(slot, _)| slot),
+        state_summaries_dag_roots = ?state_summaries_dag_roots,
+        hot_hdiff_start_slot = %hot_hdiff_start_slot,
+        split_state_root = ?split.state_root,
+        "Starting hot states migration"
     );
 
     // Upgrade all hot DB state summaries to the new type:
@@ -120,20 +116,18 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                 // a storage strategy for them. After this if else block, the summary and state are
                 // scheduled for deletion.
                 debug!(
-                    log,
-                    "Ignoring state summary prior to split slot";
-                    "slot" => slot,
-                    "state_root" => ?state_root,
+                    %slot,
+                    ?state_root,
+                    "Ignoring state summary prior to split slot"
                 );
             } else {
                 // 1. Store snapshot or diff at this slot (if required).
                 let storage_strategy = db.hot_storage_strategy(slot)?;
                 debug!(
-                    log,
-                    "Migrating state summary";
-                    "slot" => slot,
-                    "state_root" => ?state_root,
-                    "storage_strategy" => ?storage_strategy,
+                    %slot,
+                    ?state_root,
+                    ?storage_strategy,
+                    "Migrating state summary"
                 );
 
                 match storage_strategy {
@@ -233,11 +227,10 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
             if last_log_time.elapsed() > Duration::from_secs(5) {
                 last_log_time = Instant::now();
                 info!(
-                    log,
-                    "Hot states migration in progress";
-                    "diffs_written" => diffs_written,
-                    "summaries_written" => summaries_written,
-                    "summaries_count" => state_summaries_dag.summaries_count(),
+                    diffs_written = diffs_written,
+                    summaries_written = summaries_written,
+                    summaries_count = state_summaries_dag.summaries_count(),
+                    "Hot states migration in progress"
                 );
             }
         }
@@ -246,11 +239,10 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     // TODO(hdiff): Should run hot DB compaction after deleting potentially a lot of states. Or should wait
     // for the next finality event?
     info!(
-        log,
-        "Hot states migration complete";
-        "diffs_written" => diffs_written,
-        "summaries_written" => summaries_written,
-        "summaries_count" => state_summaries_dag.summaries_count(),
+        diffs_written = diffs_written,
+        summaries_written = summaries_written,
+        summaries_count = state_summaries_dag.summaries_count(),
+        "Hot states migration complete"
     );
 
     Ok(migrate_ops)
@@ -258,8 +250,8 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
 pub fn downgrade_from_v24<T: BeaconChainTypes>(
     _db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
-    _log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
+    // TODO(hdiff): proper error
     panic!("downgrade not supported");
 }
 

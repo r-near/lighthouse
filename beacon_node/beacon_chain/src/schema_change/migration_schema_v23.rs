@@ -4,7 +4,6 @@ use crate::schema_change::StoreError;
 use crate::test_utils::{PersistedBeaconChain, BEACON_CHAIN_DB_KEY, FORK_CHOICE_DB_KEY};
 use crate::BeaconForkChoiceStore;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
-use slog::Logger;
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use std::sync::Arc;
@@ -16,7 +15,6 @@ pub const DUMMY_CANONICAL_HEAD_BLOCK_ROOT: Hash256 = Hash256::repeat_byte(0xff);
 
 pub fn upgrade_to_v23<T: BeaconChainTypes>(
     db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
-    _log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
     // Set the head-tracker to empty
     let Some(persisted_beacon_chain_v22) =
@@ -38,7 +36,6 @@ pub fn upgrade_to_v23<T: BeaconChainTypes>(
 
 pub fn downgrade_from_v23<T: BeaconChainTypes>(
     db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
-    log: Logger,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
     let Some(persisted_beacon_chain) = db.get_item::<PersistedBeaconChain>(&BEACON_CHAIN_DB_KEY)?
     else {
@@ -73,7 +70,6 @@ pub fn downgrade_from_v23<T: BeaconChainTypes>(
         reset_payload_statuses,
         fc_store,
         &db.spec,
-        &log,
     )
     .map_err(|e| {
         Error::MigrationError(format!("Error loading fork choice from persisted: {e:?}"))
