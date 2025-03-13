@@ -157,7 +157,6 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                     "Validator index" => selections.validator_index,
                     "Slot" => selections.slot,
                     "Selection proof" => ?selections.selection_proof,
-
                 );
                 // println!("Selection proof: {:?}", selections);
                 async move {
