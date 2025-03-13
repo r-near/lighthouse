@@ -154,9 +154,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 debug!(
                     log,
                     "Partial selection proof from VC";
-                    "Validator index" => selections.validator_index,
-                    "Slot" => selections.slot,
-                    "Selection proof" => ?selections.selection_proof,
+                    "Selection proof" => ?selections,
                 );
                 // println!("Selection proof: {:?}", selections);
                 async move {
