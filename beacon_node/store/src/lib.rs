@@ -46,12 +46,6 @@ pub use types::*;
 
 const DATA_COLUMN_DB_KEY_SIZE: usize = 32 + 8;
 
-// TODO: check that these are not used by any variant of `DBColumn` using strum_macros
-const _DEPRECATED_COLUMN_PREFIXES: &[&str] = &[
-    // BeaconStateTemporary, deleted in Mar 2025.
-    "bst",
-];
-
 pub type ColumnIter<'a, K> = Box<dyn Iterator<Item = Result<(K, Vec<u8>), Error>> + 'a>;
 pub type ColumnKeyIter<'a, K> = Box<dyn Iterator<Item = Result<K, Error>> + 'a>;
 
@@ -290,6 +284,12 @@ pub enum DBColumn {
     /// Mapping from state root to `ColdStateSummary` in the cold DB.
     #[strum(serialize = "bcs")]
     BeaconColdStateSummary,
+    /// DEPRECATED.
+    ///
+    /// Previously used for the list of temporary states stored during block import, and then made
+    /// non-temporary by the deletion of their state root from this column.
+    #[strum(serialize = "bst")]
+    BeaconStateTemporary,
     /// Execution payloads for blocks more recent than the finalized checkpoint.
     #[strum(serialize = "exp")]
     ExecPayload,
@@ -388,6 +388,7 @@ impl DBColumn {
             | Self::BeaconBlob
             | Self::BeaconStateSummary
             | Self::BeaconColdStateSummary
+            | Self::BeaconStateTemporary
             | Self::ExecPayload
             | Self::BeaconChain
             | Self::OpPool
