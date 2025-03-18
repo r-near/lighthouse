@@ -7,7 +7,7 @@ use fork_choice::{ForkChoice, ResetPayloadStatuses};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use std::sync::Arc;
-use store::{DBColumn, Error, HotColdDB, KeyValueStoreOp, StoreItem};
+use store::{DBColumn, Error, HotColdDB, KeyValueStore, KeyValueStoreOp, StoreItem};
 use types::{Hash256, Slot};
 
 /// Dummy value to use for the canonical head block root, see below.
@@ -16,7 +16,7 @@ pub const DUMMY_CANONICAL_HEAD_BLOCK_ROOT: Hash256 = Hash256::repeat_byte(0xff);
 pub fn upgrade_to_v23<T: BeaconChainTypes>(
     db: Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
 ) -> Result<Vec<KeyValueStoreOp>, Error> {
-    // Set the head-tracker to empty
+    // 1) Set the head-tracker to empty
     let Some(persisted_beacon_chain_v22) =
         db.get_item::<PersistedBeaconChainV22>(&BEACON_CHAIN_DB_KEY)?
     else {
@@ -29,7 +29,19 @@ pub fn upgrade_to_v23<T: BeaconChainTypes>(
         genesis_block_root: persisted_beacon_chain_v22.genesis_block_root,
     };
 
-    let ops = vec![persisted_beacon_chain.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
+    let mut ops = vec![persisted_beacon_chain.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
+
+    // 2) Wipe out all state temporary flags. While un-used in V23, if there's a rollback we could
+    // end-up with an inconsistent DB.
+    for state_root_result in db
+        .hot_db
+        .iter_column_keys::<Hash256>(DBColumn::BeaconStateTemporary)
+    {
+        ops.push(KeyValueStoreOp::DeleteKey(
+            DBColumn::BeaconStateTemporary,
+            state_root_result?.as_slice().to_vec(),
+        ));
+    }
 
     Ok(ops)
 }
