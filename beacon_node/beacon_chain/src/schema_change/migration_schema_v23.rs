@@ -29,7 +29,7 @@ pub fn upgrade_to_v23<T: BeaconChainTypes>(
         genesis_block_root: persisted_beacon_chain_v22.genesis_block_root,
     };
 
-    let ops = vec![persisted_beacon_chain.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
+    let mut ops = vec![persisted_beacon_chain.as_kv_store_op(BEACON_CHAIN_DB_KEY)];
 
     // 2) Wipe out all state temporary flags. While un-used in V23, if there's a rollback we could
     // end-up with an inconsistent DB.
