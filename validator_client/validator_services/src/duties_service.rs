@@ -155,6 +155,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                     log,
                     "Partial selection proof from VC";
                     "Selection proof" => ?selections,
+                    "Public key" => ?duty.pubkey,
                 );
                 // println!("Selection proof: {:?}", selections);
                 async move {
