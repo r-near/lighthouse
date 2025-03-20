@@ -155,7 +155,6 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                     log,
                     "Partial selection proof from VC";
                     "Selection proof" => ?selections,
-                    "Public key" => ?duty.pubkey,
                 );
                 // println!("Selection proof: {:?}", selections);
                 async move {
@@ -1160,22 +1159,40 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                 &[validator_metrics::ATTESTATION_SELECTION_PROOFS],
             );
 
-            // Sign selection proofs (serially).
-            let duty_and_proof_results = stream::iter(relevant_duties.into_values().flatten())
-                .then(|duty| async {
-                    let opt_selection_proof = make_selection_proof(
-                        &duty,
-                        &duties_service.validator_store,
-                        &duties_service.spec,
-                        duties_service.distributed,
-                        &duties_service.beacon_nodes,
-                        &duties_service,
-                    )
-                    .await?;
-                    Ok((duty, opt_selection_proof))
-                })
-                .collect::<Vec<_>>()
-                .await;
+            // In distributed case, sign selection proofs in parallel; otherwise, sign them serially in non-distributed case
+            let duty_and_proof_results = if duties_service.distributed {
+                futures::future::join_all(relevant_duties.into_values().flatten().map(
+                    |duty| async {
+                        let opt_selection_proof = make_selection_proof(
+                            &duty,
+                            &duties_service.validator_store,
+                            &duties_service.spec,
+                            duties_service.distributed,
+                            &duties_service.beacon_nodes,
+                            &duties_service,
+                        )
+                        .await?;
+                        Ok((duty, opt_selection_proof))
+                    },
+                ))
+                .await
+            } else {
+                stream::iter(relevant_duties.into_values().flatten())
+                    .then(|duty| async {
+                        let opt_selection_proof = make_selection_proof(
+                            &duty,
+                            &duties_service.validator_store,
+                            &duties_service.spec,
+                            duties_service.distributed,
+                            &duties_service.beacon_nodes,
+                            &duties_service,
+                        )
+                        .await?;
+                        Ok((duty, opt_selection_proof))
+                    })
+                    .collect::<Vec<_>>()
+                    .await
+            };
 
             // Add to attesters store.
             let mut attesters = duties_service.attesters.write();
