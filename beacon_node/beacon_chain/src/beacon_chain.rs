@@ -2391,10 +2391,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         let _timer =
             metrics::start_timer(&metrics::UNAGGREGATED_ATTESTATION_GOSSIP_VERIFICATION_TIMES);
 
-        GossipVerifiedInclusionList::verify(inclusion_list, self).inspect(|_v| {
-            // TODO(focil) emit event
-            if let Some(_event_handler) = self.event_handler.as_ref() {}
+        GossipVerifiedInclusionList::verify(inclusion_list, self).inspect(|v| {
             metrics::inc_counter(&metrics::INCLUSION_LIST_PROCESSING_SUCCESSES);
+            if let Some(event_handler) = self.event_handler.as_ref() {
+                event_handler.register(EventKind::InclusionList(Box::new(
+                    v.signed_il.clone(),
+                )));
+            }
         })
     }
 

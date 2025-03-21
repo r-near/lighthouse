@@ -25,6 +25,7 @@ pub struct ServerSentEventHandler<E: EthSpec> {
     attester_slashing_tx: Sender<EventKind<E>>,
     bls_to_execution_change_tx: Sender<EventKind<E>>,
     block_gossip_tx: Sender<EventKind<E>>,
+    inclusion_list_tx: Sender<EventKind<E>>,
     log: Logger,
 }
 
@@ -55,6 +56,7 @@ impl<E: EthSpec> ServerSentEventHandler<E> {
         let (attester_slashing_tx, _) = broadcast::channel(capacity);
         let (bls_to_execution_change_tx, _) = broadcast::channel(capacity);
         let (block_gossip_tx, _) = broadcast::channel(capacity);
+        let (inclusion_list_tx, _) = broadcast::channel(capacity);
 
         Self {
             attestation_tx,
@@ -75,6 +77,7 @@ impl<E: EthSpec> ServerSentEventHandler<E> {
             attester_slashing_tx,
             bls_to_execution_change_tx,
             block_gossip_tx,
+            inclusion_list_tx,
             log,
         }
     }
@@ -161,6 +164,10 @@ impl<E: EthSpec> ServerSentEventHandler<E> {
                 .block_gossip_tx
                 .send(kind)
                 .map(|count| log_count("block gossip", count)),
+            EventKind::InclusionList(_) => self
+                .inclusion_list_tx
+                .send(kind)
+                .map(|count| log_count("inclusion list", count)),
         };
         if let Err(SendError(event)) = result {
             trace!(self.log, "No receivers registered to listen for event"; "event" => ?event);
@@ -239,6 +246,10 @@ impl<E: EthSpec> ServerSentEventHandler<E> {
         self.block_gossip_tx.subscribe()
     }
 
+    pub fn subscribe_inclusion_list(&self) -> Receiver<EventKind<E>> {
+        self.inclusion_list_tx.subscribe()
+    }
+
     pub fn has_attestation_subscribers(&self) -> bool {
         self.attestation_tx.receiver_count() > 0
     }
@@ -301,5 +312,9 @@ impl<E: EthSpec> ServerSentEventHandler<E> {
 
     pub fn has_block_gossip_subscribers(&self) -> bool {
         self.block_gossip_tx.receiver_count() > 0
+    }
+
+    pub fn has_inclusion_list_subscribers(&self) -> bool {
+        self.inclusion_list_tx.receiver_count() > 0
     }
 }

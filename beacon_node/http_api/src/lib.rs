@@ -4699,6 +4699,9 @@ pub fn serve<T: BeaconChainTypes>(
                                 api_types::EventTopic::BlockGossip => {
                                     event_handler.subscribe_block_gossip()
                                 }
+                                api_types::EventTopic::InclusionList => {
+                                    event_handler.subscribe_inclusion_list()
+                                }
                             };
 
                             receivers.push(

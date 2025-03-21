@@ -204,7 +204,7 @@ impl<'a, E: EthSpec> NewPayloadRequest<'a, E> {
                     .collect(),
                 parent_beacon_block_root: block_ref.parent_root,
                 execution_requests: &block_ref.body.execution_requests,
-                il_transactions
+                il_transactions,
             })),
             BeaconBlockRef::Fulu(block_ref) => Ok(Self::Fulu(NewPayloadRequestFulu {
                 execution_payload: &block_ref.body.execution_payload.execution_payload,
