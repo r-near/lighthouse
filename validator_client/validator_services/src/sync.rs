@@ -520,8 +520,15 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
         "pre_compute_slot" => pre_compute_slot
     );
 
+    let slots_to_process = if duties_service.distributed {
+        vec![current_slot]
+    } else {
+        (current_slot.as_u64()..=pre_compute_slot.as_u64())
+            .map(Slot::new)
+            .collect::<Vec<_>>()
+    };
     // Generate selection proofs for each validator at each slot, one slot at a time.
-    for slot in (current_slot.as_u64()..=pre_compute_slot.as_u64()).map(Slot::new) {
+    for slot in slots_to_process {
         let mut validator_proofs = vec![];
         for (validator_start_slot, duty) in pre_compute_duties {
             // Proofs are already known at this slot for this validator.
