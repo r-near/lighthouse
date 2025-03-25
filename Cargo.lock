@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "beacon_node"
-version = "7.0.0-beta.0"
+version = "7.0.0-beta.4"
 dependencies = [
  "account_utils",
  "beacon_chain",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "boot_node"
-version = "7.0.0-beta.0"
+version = "7.0.0-beta.4"
 dependencies = [
  "beacon_node",
  "bytes",
@@ -1915,7 +1915,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18e4fdb82bd54a12e42fb58a800dcae6b9e13982238ce2296dc3570b92148e1f"
 dependencies = [
  "data-encoding",
- "syn 2.0.100",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4691,7 +4691,7 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "lcli"
-version = "7.0.0-beta.0"
+version = "7.0.0-beta.4"
 dependencies = [
  "account_utils",
  "beacon_chain",
@@ -4762,7 +4762,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -4884,8 +4884,8 @@ dependencies = [
 
 [[package]]
 name = "libp2p-gossipsub"
-version = "0.48.1"
-source = "git+https://github.com/sigp/rust-libp2p.git?branch=sigp-gossipsub#3e24b1bbec5fae182595aee0958f823be87afaad"
+version = "0.49.0"
+source = "git+https://github.com/sigp/rust-libp2p.git?rev=7a36e4c#7a36e4cde83041f1bd5f2078c4d3934ccb16777e"
 dependencies = [
  "async-channel 2.3.1",
  "asynchronous-codec",
@@ -5253,7 +5253,7 @@ dependencies = [
 
 [[package]]
 name = "lighthouse"
-version = "7.0.0-beta.0"
+version = "7.0.0-beta.4"
 dependencies = [
  "account_manager",
  "account_utils",
@@ -7293,9 +7293,9 @@ dependencies = [
 
 [[package]]
 name = "ring"
-version = "0.17.13"
+version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70ac5d832aa16abd7d1def883a8545280c20a60f523a370aa3a9617c2b8550ee"
+checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
@@ -9470,7 +9470,6 @@ name = "validator_test_rig"
 version = "0.1.0"
 dependencies = [
  "eth2",
- "logging",
  "mockito",
  "regex",
  "sensitive_url",
