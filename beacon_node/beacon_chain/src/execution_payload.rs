@@ -17,7 +17,6 @@ use execution_layer::{
 };
 use fork_choice::{InvalidationOperation, PayloadVerificationStatus};
 use proto_array::{Block as ProtoBlock, ExecutionStatus};
-use slog::{debug, warn};
 use slot_clock::SlotClock;
 use state_processing::per_block_processing::{
     compute_timestamp_at_slot, get_expected_withdrawals, is_execution_enabled,
@@ -25,6 +24,7 @@ use state_processing::per_block_processing::{
 };
 use std::sync::Arc;
 use tokio::task::JoinHandle;
+use tracing::{debug, warn};
 use tree_hash::TreeHash;
 use types::payload::BlockProductionVersion;
 use types::*;
@@ -86,11 +86,10 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
                         block_message.try_into()?;
                     if let Err(e) = new_payload_request.perform_optimistic_sync_verifications() {
                         warn!(
-                            chain.log,
-                            "Falling back to slow block hash verification";
-                            "block_number" => ?block_message.execution_payload().map(|payload| payload.block_number()),
-                            "info" => "you can silence this warning with --disable-optimistic-finalized-sync",
-                            "error" => ?e,
+                            block_number = ?block_message.execution_payload().map(|payload| payload.block_number()),
+                            info = "you can silence this warning with --disable-optimistic-finalized-sync",
+                            error = ?e,
+                            "Falling back to slow block hash verification"
                         );
                         None
                     } else {
@@ -113,7 +112,11 @@ impl<T: BeaconChainTypes> PayloadNotifier<T> {
                 .get_inclusion_list_transactions(block.slot())
                 .unwrap_or(vec![].into());
 
-            debug!(chain.log, "Adding inclusion list transactions in the Payload Notifier"; "count" => inclusion_list_transactions.len(), "slot" => block.slot());
+            debug!(
+                tx_count =  inclusion_list_transactions.len(),
+                slot = ?block.slot(),
+                "Adding inclusion list transactions in the Payload Notifier"
+            );
             inclusion_list_transactions
         } else {
             vec![].into()
@@ -179,16 +182,15 @@ async fn notify_new_payload<T: BeaconChainTypes>(
                 ref validation_error,
             } => {
                 warn!(
-                    chain.log,
-                    "Invalid execution payload";
-                    "validation_error" => ?validation_error,
-                    "latest_valid_hash" => ?latest_valid_hash,
-                    "execution_block_hash" => ?execution_block_hash,
-                    "root" => ?block.tree_hash_root(),
-                    "graffiti" => block.body().graffiti().as_utf8_lossy(),
-                    "proposer_index" => block.proposer_index(),
-                    "slot" => block.slot(),
-                    "method" => "new_payload",
+                    ?validation_error,
+                    ?latest_valid_hash,
+                    ?execution_block_hash,
+                    root = ?block.tree_hash_root(),
+                    graffiti = block.body().graffiti().as_utf8_lossy(),
+                    proposer_index = block.proposer_index(),
+                    slot = %block.slot(),
+                    method = "new_payload",
+                    "Invalid execution payload"
                 );
 
                 // Only trigger payload invalidation in fork choice if the
@@ -215,10 +217,7 @@ async fn notify_new_payload<T: BeaconChainTypes>(
                     // transactions for this slot, update the fork choice store before processing
                     // the invalid EL payload.
                     if *validation_error == Some("INVALID_INCLUSION_LIST".to_string()) {
-                        debug!(
-                            chain.log,
-                            "Unsatisfied inclusion list";
-                        );
+                        debug!("Unsatisfied inclusion list");
                         chain
                             .set_unsatisfied_inclusion_list_block(
                                 block.slot(),
@@ -242,15 +241,14 @@ async fn notify_new_payload<T: BeaconChainTypes>(
                 ref validation_error,
             } => {
                 warn!(
-                    chain.log,
-                    "Invalid execution payload block hash";
-                    "validation_error" => ?validation_error,
-                    "execution_block_hash" => ?execution_block_hash,
-                    "root" => ?block.tree_hash_root(),
-                    "graffiti" => block.body().graffiti().as_utf8_lossy(),
-                    "proposer_index" => block.proposer_index(),
-                    "slot" => block.slot(),
-                    "method" => "new_payload",
+                    ?validation_error,
+                    ?execution_block_hash,
+                    root = ?block.tree_hash_root(),
+                    graffiti = block.body().graffiti().as_utf8_lossy(),
+                    proposer_index = block.proposer_index(),
+                    slot = %block.slot(),
+                    method = "new_payload",
+                    "Invalid execution payload block hash"
                 );
 
                 // Returning an error here should be sufficient to invalidate the block. We have no
@@ -323,10 +321,9 @@ pub async fn validate_merge_block<T: BeaconChainTypes>(
         None => {
             if allow_optimistic_import == AllowOptimisticImport::Yes {
                 debug!(
-                    chain.log,
-                    "Optimistically importing merge transition block";
-                    "block_hash" => ?execution_payload.parent_hash(),
-                    "msg" => "the terminal block/parent was unavailable"
+                    block_hash = ?execution_payload.parent_hash(),
+                    msg = "the terminal block/parent was unavailable",
+                    "Optimistically importing merge transition block"
                 );
                 Ok(())
             } else {

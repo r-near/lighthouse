@@ -2,11 +2,12 @@ use crate::duties_service::DutiesService;
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback};
 use environment::RuntimeContext;
 use futures::future::join_all;
-use slog::{crit, debug, error, info, trace, warn};
+use logging::crit;
 use slot_clock::SlotClock;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
+use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec, InclusionList, InclusionListDuty, Slot};
 use validator_store::{Error as ValidatorStoreError, ValidatorStore};
 
@@ -61,8 +62,6 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
 
     /// Starts the service which periodically produces inclusion lists.
     pub fn start_update_service(self, spec: &ChainSpec) -> Result<(), String> {
-        let log = self.context.log().clone();
-
         let slot_duration = Duration::from_secs(spec.seconds_per_slot);
         let duration_to_next_slot = self
             .slot_clock
@@ -70,9 +69,8 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .ok_or("Unable to determine duration to next slot")?;
 
         info!(
-            log,
-            "Inclusion list production service started";
-            "next_update_millis" => duration_to_next_slot.as_millis()
+            next_update_millis = ?duration_to_next_slot.as_millis(),
+            "Inclusion list production service started",
         );
 
         let executor = self.context.executor.clone();
@@ -82,22 +80,16 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
                 if let Some(duration_to_next_slot) = self.slot_clock.duration_to_next_slot() {
                     // 3/4 of the way into the slot
                     sleep(duration_to_next_slot + (slot_duration * 3 / 4)).await;
-                    let log = self.context.log();
-
                     if let Err(e) = self.spawn_inclusion_list_task(slot_duration, &chain_spec) {
                         crit!(
-                            log,
-                            "Failed to spawn inclusion list task";
-                            "error" => e
+                            error = ?e,
+                            "Failed to spawn inclusion list task"
                         )
                     } else {
-                        trace!(
-                            log,
-                            "Spawned inclusion list task";
-                        )
+                        trace!("Spawned inclusion list task")
                     }
                 } else {
-                    error!(log, "Failed to read slot clock");
+                    error!("Failed to read slot clock");
                     // If we can't read the slot clock, just wait another slot.
                     sleep(slot_duration).await;
                     continue;
@@ -117,18 +109,12 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         _slot_duration: Duration,
         spec: &ChainSpec,
     ) -> Result<(), String> {
-        debug!(
-            self.context.log(),
-            "Spawning inclusion list task";
-        );
+        debug!("Spawning inclusion list task");
 
         let next_slot = self.slot_clock.now().ok_or("Failed to read slot clock")? + 1;
 
         if !spec.is_focil_enabled_for_epoch(next_slot.epoch(E::slots_per_epoch())) {
-            debug!(
-                self.context.log(),
-                "FOCIL not enabled";
-            );
+            debug!("FOCIL not enabled");
             return Ok(());
         }
 
@@ -163,7 +149,6 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         slot: Slot,
         validator_duties: Vec<InclusionListDuty>,
     ) -> Result<(), ()> {
-        let log = self.context.log();
         let validator_store = self.validator_store.clone();
 
         if validator_duties.is_empty() {
@@ -179,10 +164,9 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
         // TODO(focil) unused variable
         let _current_epoch = current_epoch.map_err(|e| {
             crit!(
-                log,
-                "Error during inclusion list routine";
-                "error" => format!("{:?}", e),
-                "slot" => slot.as_u64(),
+                error = format!("{:?}", e),
+                ?slot,
+                "Error during inclusion list routine",
             )
         })?;
 
@@ -200,10 +184,9 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .await
             .map_err(|e| {
                 crit!(
-                    log,
-                    "Error during inclusion list routine";
-                    "error" => format!("{}", e),
-                    "slot" => slot.as_u64(),
+                    error = format!("{}", e),
+                    ?slot,
+                    "Error during inclusion list routine"
                 )
             })?;
 
@@ -223,11 +206,10 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
                 // TODO: do we need to check any other fields here?
                 if inclusion_list.slot != duty.slot {
                     crit!(
-                        log,
-                        "Inconsistent validator duties during signing";
-                        "validator" => ?duty.pubkey,
-                        "duty_slot" => duty.slot,
-                        "inclusion_list_slot" => inclusion_list.slot,
+                        validator = ?duty.pubkey,
+                        duty_slot = ?duty.slot,
+                        inclusion_list_slot = ?inclusion_list.slot,
+                        "Inconsistent validator duties during signing"
                     );
                     return None;
                 }
@@ -241,22 +223,20 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
                         // A pubkey can be missing when a validator was recently
                         // removed via the API.
                         warn!(
-                            log,
-                            "Missing pubkey for inclusion list";
-                            "info" => "a validator may have recently been removed from this VC",
-                            "pubkey" => ?pubkey,
-                            "validator" => ?duty.pubkey,
-                            "slot" => slot.as_u64(),
+                            info = "a validator may have recently been removed from this VC",
+                            ?pubkey,
+                            validator = ?duty.pubkey,
+                            ?slot,
+                            "Missing pubkey for inclusion list",
                         );
                         None
                     }
                     Err(e) => {
                         crit!(
-                            log,
-                            "Failed to sign inclusion list";
-                            "error" => ?e,
-                            "validator" => ?duty.pubkey,
-                            "slot" => slot.as_u64(),
+                            error = ?e,
+                            validator = ?duty.pubkey,
+                            ?slot,
+                            "Failed to sign inclusion list",
                         );
                         None
                     }
@@ -273,7 +253,7 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
                 .unzip();
 
         if inclusion_lists.is_empty() {
-            warn!(log, "No inclusion lists were published");
+            warn!("No inclusion lists were published");
             return Ok(());
         }
 
@@ -289,17 +269,15 @@ impl<T: SlotClock + 'static, E: EthSpec> InclusionListService<T, E> {
             .await
         {
             Ok(()) => info!(
-                log,
-                "Successfully published inclusion lists";
-                "count" => inclusion_lists.len(),
-                "validator_indices" => ?validator_indices,
-                "slot" => slot.as_u64(),
+                il_count = inclusion_lists.len(),
+                ?validator_indices,
+                ?slot,
+                "Successfully published inclusion lists",
             ),
             Err(e) => error!(
-                log,
-                "Unable to publish inclusion lists";
-                "error" => %e,
-                "slot" => slot.as_u64(),
+                error = %e,
+                ?slot,
+                "Unable to publish inclusion lists"
             ),
         }
 

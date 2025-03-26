@@ -1,6 +1,6 @@
 use super::{EthSpec, InclusionListTransactions, SignedInclusionList, Slot, Transaction};
-use slog::{debug, Logger};
 use std::collections::{HashMap, HashSet};
+use tracing::debug;
 
 /// Map from slot to inclusion lists
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -23,7 +23,7 @@ impl<E: EthSpec> InclusionListCache<E> {
         self.inner_map.remove(&slot);
     }
 
-    pub fn on_inclusion_list(&mut self, inclusion_list: SignedInclusionList<E>, log: &Logger) {
+    pub fn on_inclusion_list(&mut self, inclusion_list: SignedInclusionList<E>) {
         let slot = inclusion_list.message.slot;
         let inner = self.inner_map.entry(slot).or_default();
 
@@ -32,10 +32,9 @@ impl<E: EthSpec> InclusionListCache<E> {
             .contains(&inclusion_list.message.validator_index)
         {
             debug!(
-                log,
-                "This validator was flagged for an equivocating inclusion list";
-                "slot" => slot,
-                "validator_index" => inclusion_list.message.validator_index
+                ?slot,
+                inclusion_list.message.validator_index,
+                "This validator was flagged for an equivocating inclusion list",
             );
             return;
         }
@@ -46,10 +45,7 @@ impl<E: EthSpec> InclusionListCache<E> {
             .contains(&inclusion_list.message.validator_index)
             && inner.inclusion_lists.contains(&inclusion_list)
         {
-            debug!(
-                log,
-                "Already seen identical inclusion list from this validator";
-            );
+            debug!("Already seen identical inclusion list from this validator");
             return;
         }
 
@@ -59,10 +55,8 @@ impl<E: EthSpec> InclusionListCache<E> {
             && !inner.inclusion_lists.contains(&inclusion_list)
         {
             debug!(
-                log,
-                "Equivocating inclusion list";
-                "slot" => slot,
-                "validator_index" => inclusion_list.message.validator_index
+                ?slot,
+                inclusion_list.message.validator_index, "Equivocating inclusion list",
             );
             inner
                 .inclusion_list_equivocators
@@ -81,10 +75,9 @@ impl<E: EthSpec> InclusionListCache<E> {
         inner.inclusion_lists.insert(inclusion_list);
 
         debug!(
-            log,
-            "Successfully added inclusion list transactions to the cache";
-            "slot" => slot,
-            "total_count" => inner.inclusion_list_transactions.len()
+            ?slot,
+            tx_count = inner.inclusion_list_transactions.len(),
+            "Successfully added inclusion list transactions to the cache",
         );
     }
 

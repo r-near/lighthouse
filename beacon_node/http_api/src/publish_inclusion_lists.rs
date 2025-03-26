@@ -6,11 +6,11 @@ use beacon_processor::work_reprocessing_queue::ReprocessQueueMessage;
 use eth2::types::Failure;
 use lighthouse_network::PubsubMessage;
 use network::NetworkMessage;
-use slog::{debug, error, info, Logger};
 use tokio::sync::{
     mpsc::{Sender, UnboundedSender},
     oneshot,
 };
+use tracing::{debug, error, info};
 use types::SignedInclusionList;
 
 use crate::task_spawner::{Priority, TaskSpawner};
@@ -36,12 +36,9 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
     inclusion_lists: Vec<SignedInclusionList<T::EthSpec>>,
     network_tx: UnboundedSender<NetworkMessage<T::EthSpec>>,
     _reprocess_send: Option<Sender<ReprocessQueueMessage>>,
-    log: Logger,
 ) -> Result<(), warp::Rejection> {
     // Gossip validate and publish inclusion lists that can be immediately processed.
     let seen_timestamp = timestamp_now();
-    let inner_log = log.clone();
-
     let inclusion_list_metadata = inclusion_lists
         .iter()
         .map(|inclusion_list| {
@@ -62,16 +59,18 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
                         &inclusion_list,
                         seen_timestamp,
                         &network_tx,
-                        &inner_log,
                     ) {
                         Ok(()) => {
-                            debug!(inner_log, "Successfully verified gossip inclusion list");
+                            debug!("Successfully verified gossip inclusion list");
                             PublishInclusionListResult::Success
-                        },
+                        }
                         Err(e) => {
-                            debug!(inner_log, "Failed to verify gossip inclusion list"; "error" => format!("{:?}", e));
+                            debug!(
+                                error = ?e,
+                                "Failed to verify gossip inclusion list"
+                            );
                             PublishInclusionListResult::Failure(e)
-                        },
+                        }
                     }
                 })
                 .map(Some)
@@ -102,10 +101,9 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
     for (i, reprocess_result) in reprocess_indices.into_iter().zip(reprocess_results) {
         let Some(result_entry) = prelim_results.get_mut(i) else {
             error!(
-                log,
-                "Unreachable case in inclusion list publishing";
-                "case" => "prelim out of bounds",
-                "request_index" => i,
+                case = "prelim out of bounds",
+                request_index = i,
+                "Unreachable case in inclusion list publishing",
             );
             continue;
         };
@@ -133,37 +131,31 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
             Some(PublishInclusionListResult::Failure(e)) => {
                 if let Some((slot, validator_index)) = inclusion_list_metadata.get(index) {
                     error!(
-                        log,
-                        "Failure verifying attestation for gossip";
-                        "error" => ?e,
-                        "request_index" => index,
-                        "validator_index" => validator_index,
-                        "inclusion_list_slot" => slot,
+                        error = ?e,
+                        request_index = index,
+                        validator_index,
+                        il_slot = ?slot,
+                        "Failure verifying attestation for gossip"
                     );
                     failures.push(Failure::new(index, format!("{e:?}")));
                 } else {
                     error!(
-                        log,
-                        "Unreachable case in inclusion list publishing";
-                        "case" => "out of bounds",
-                        "request_index" => index
+                        case = "out of bounds",
+                        request_index = index,
+                        "Unreachable case in inclusion list publishing",
                     );
                     failures.push(Failure::new(index, "metadata logic error".into()));
                 }
             }
             Some(PublishInclusionListResult::Reprocessing(_)) => {
                 // TODO(focil) reprocessing
-                info!(
-                    log,
-                    "Reprocessing result";
-                );
+                info!("Reprocessing result");
             }
             None => {
                 error!(
-                    log,
-                    "Unreachable case in inclusion list publishing";
-                    "case" => "result is None",
-                    "request_index" => index
+                    case = "result is None",
+                    request_index = index,
+                    "Unreachable case in inclusion list publishing",
                 );
                 failures.push(Failure::new(index, "result logic error".into()));
             }
@@ -171,11 +163,7 @@ pub async fn publish_inclusion_lists<T: BeaconChainTypes>(
     }
 
     if num_already_known > 0 {
-        debug!(
-            log,
-            "Some inclusion lists already known";
-            "count" => num_already_known
-        );
+        debug!(num_already_known, "Some inclusion lists already known");
     }
 
     if failures.is_empty() {
@@ -193,7 +181,6 @@ fn verify_and_publish_inclusion_list<T: BeaconChainTypes>(
     inclusion_list: &SignedInclusionList<T::EthSpec>,
     seen_timestamp: Duration,
     network_tx: &UnboundedSender<NetworkMessage<T::EthSpec>>,
-    log: &Logger,
 ) -> Result<(), Error> {
     let verified_inclusion_list = chain
         .verify_inclusion_list_for_gossip(inclusion_list)
@@ -208,9 +195,8 @@ fn verify_and_publish_inclusion_list<T: BeaconChainTypes>(
         .map_err(|_| Error::Publication)?;
 
     info!(
-        log,
-        "Published inclusion list";
-        "slot" => verified_inclusion_list.signed_il.message.slot
+        slot = ?verified_inclusion_list.signed_il.message.slot,
+        "Published inclusion list"
     );
 
     // TODO(focil) add reprocess logic?

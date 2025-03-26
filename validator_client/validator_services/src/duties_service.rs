@@ -19,7 +19,6 @@ use eth2::types::{
 use futures::{stream, StreamExt};
 use parking_lot::RwLock;
 use safe_arith::{ArithError, SafeArith};
-use slog::{debug, error, info, warn, Logger};
 use slot_clock::SlotClock;
 use std::cmp::min;
 use std::collections::{hash_map, BTreeMap, HashMap, HashSet};
@@ -27,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{sync::mpsc::Sender, time::sleep};
+use tracing::{debug, error, info, warn};
 use types::{ChainSpec, Epoch, EthSpec, Hash256, PublicKeyBytes, SelectionProof, Slot};
 use validator_metrics::{get_int_gauge, set_int_gauge, ATTESTATION_DUTY};
 use validator_store::{Error as ValidatorStoreError, ValidatorStore};
@@ -236,6 +236,7 @@ pub struct DutiesService<T, E: EthSpec> {
     pub enable_high_validator_count_metrics: bool,
     /// If this validator is running in distributed mode.
     pub distributed: bool,
+    pub disable_attesting: bool,
 }
 
 impl<T: SlotClock + 'static, E: EthSpec> DutiesService<T, E> {
@@ -406,7 +407,6 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
      * Spawn the task which keeps track of local block proposal duties.
      */
     let duties_service = core_duties_service.clone();
-    let log = core_duties_service.context.log().clone();
     core_duties_service.context.executor.spawn(
         async move {
             loop {
@@ -422,9 +422,8 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
                 if let Err(e) = poll_beacon_proposers(&duties_service, &mut block_service_tx).await
                 {
                     error!(
-                       log,
-                       "Failed to poll beacon proposers";
-                       "error" => ?e
+                        error = ?e,
+                       "Failed to poll beacon proposers"
                     )
                 }
             }
@@ -432,11 +431,15 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
         "duties_service_proposers",
     );
 
+    // Skip starting attestation duties or sync committee services.
+    if core_duties_service.disable_attesting {
+        return;
+    }
+
     /*
      * Spawn the task which keeps track of local attestation duties.
      */
     let duties_service = core_duties_service.clone();
-    let log = core_duties_service.context.log().clone();
     core_duties_service.context.executor.spawn(
         async move {
             loop {
@@ -451,9 +454,8 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
 
                 if let Err(e) = poll_beacon_attesters(&duties_service).await {
                     error!(
-                       log,
-                       "Failed to poll beacon attesters";
-                       "error" => ?e
+                        error = ?e,
+                       "Failed to poll beacon attesters"
                     );
                 }
             }
@@ -463,15 +465,13 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
 
     // Spawn the task which keeps track of local sync committee duties.
     let duties_service = core_duties_service.clone();
-    let log = core_duties_service.context.log().clone();
     core_duties_service.context.executor.spawn(
         async move {
             loop {
                 if let Err(e) = poll_sync_committee_duties(&duties_service).await {
                     error!(
-                       log,
-                       "Failed to poll sync committee duties";
-                       "error" => ?e
+                        error = ?e,
+                       "Failed to poll sync committee duties"
                     );
                 }
 
@@ -496,7 +496,6 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
      * Spawn the task which keeps track of local inclusion list duties.
      */
     let duties_service = core_duties_service.clone();
-    let log = core_duties_service.context.log().clone();
     core_duties_service.context.executor.spawn(
         async move {
             loop {
@@ -511,9 +510,8 @@ pub fn start_update_service<T: SlotClock + 'static, E: EthSpec>(
 
                 if let Err(e) = poll_beacon_inclusion_list_duties(&duties_service).await {
                     error!(
-                       log,
-                       "Failed to poll inclusion list duties";
-                       "error" => ?e
+                        error = ?e,
+                       "Failed to poll inclusion list duties"
                     );
                 }
             }
@@ -531,8 +529,6 @@ async fn poll_validator_indices<T: SlotClock + 'static, E: EthSpec>(
         &validator_metrics::DUTIES_SERVICE_TIMES,
         &[validator_metrics::UPDATE_INDICES],
     );
-
-    let log = duties_service.context.log();
 
     // Collect *all* pubkeys for resolving indices, even those undergoing doppelganger protection.
     //
@@ -599,11 +595,10 @@ async fn poll_validator_indices<T: SlotClock + 'static, E: EthSpec>(
             match download_result {
                 Ok(Some(response)) => {
                     info!(
-                        log,
-                        "Validator exists in beacon chain";
-                        "pubkey" => ?pubkey,
-                        "validator_index" => response.data.index,
-                        "fee_recipient" => fee_recipient
+                        ?pubkey,
+                        validator_index = response.data.index,
+                        fee_recipient,
+                        "Validator exists in beacon chain"
                     );
                     duties_service
                         .validator_store
@@ -627,21 +622,15 @@ async fn poll_validator_indices<T: SlotClock + 'static, E: EthSpec>(
                             .insert(pubkey, next_poll_slot);
                     }
 
-                    debug!(
-                        log,
-                        "Validator without index";
-                        "pubkey" => ?pubkey,
-                        "fee_recipient" => fee_recipient
-                    )
+                    debug!(?pubkey, fee_recipient, "Validator without index")
                 }
                 // Don't exit early on an error, keep attempting to resolve other indices.
                 Err(e) => {
                     error!(
-                        log,
-                        "Failed to resolve pubkey to index";
-                        "error" => %e,
-                        "pubkey" => ?pubkey,
-                        "fee_recipient" => fee_recipient
+                        error = %e,
+                        ?pubkey,
+                        fee_recipient,
+                        "Failed to resolve pubkey to index"
                     )
                 }
             }
@@ -664,8 +653,6 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
         &validator_metrics::DUTIES_SERVICE_TIMES,
         &[validator_metrics::UPDATE_ATTESTERS_CURRENT_EPOCH],
     );
-
-    let log = duties_service.context.log();
 
     let current_slot = duties_service
         .slot_clock
@@ -705,11 +692,10 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
     .await
     {
         error!(
-            log,
-            "Failed to download attester duties";
-            "current_epoch" => current_epoch,
-            "request_epoch" => current_epoch,
-            "err" => ?e,
+            %current_epoch,
+            request_epoch = %current_epoch,
+            err = ?e,
+            "Failed to download attester duties"
         )
     }
 
@@ -727,11 +713,10 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
             .await
     {
         error!(
-            log,
-            "Failed to download attester duties";
-            "current_epoch" => current_epoch,
-            "request_epoch" => next_epoch,
-            "err" => ?e,
+            %current_epoch,
+            request_epoch = %next_epoch,
+            err = ?e,
+            "Failed to download attester duties"
         )
     }
 
@@ -810,9 +795,8 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
             .await;
         if subscription_result.as_ref().is_ok() {
             debug!(
-                log,
-                "Broadcast attestation subscriptions";
-                "count" => subscriptions.len(),
+                count = subscriptions.len(),
+                "Broadcast attestation subscriptions"
             );
             for subscription_slots in subscription_slots_to_confirm {
                 subscription_slots.record_successful_subscription_at(current_slot);
@@ -820,9 +804,8 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
         } else if let Err(e) = subscription_result {
             if e.num_errors() < duties_service.beacon_nodes.num_total().await {
                 warn!(
-                    log,
-                    "Some subscriptions failed";
-                    "error" => %e,
+                    error = %e,
+                    "Some subscriptions failed"
                 );
                 // If subscriptions were sent to at least one node, regard that as a success.
                 // There is some redundancy built into the subscription schedule to handle failures.
@@ -831,9 +814,8 @@ async fn poll_beacon_attesters<T: SlotClock + 'static, E: EthSpec>(
                 }
             } else {
                 error!(
-                    log,
-                    "All subscriptions failed";
-                    "error" => %e
+                    error = %e,
+                    "All subscriptions failed"
                 );
             }
         }
@@ -861,14 +843,11 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
     local_indices: &[u64],
     local_pubkeys: &HashSet<PublicKeyBytes>,
 ) -> Result<(), Error> {
-    let log = duties_service.context.log();
-
     // No need to bother the BN if we don't have any validators.
     if local_indices.is_empty() {
         debug!(
-            duties_service.context.log(),
-            "No validators, not downloading duties";
-            "epoch" => epoch,
+            %epoch,
+            "No validators, not downloading duties"
         );
         return Ok(());
     }
@@ -947,10 +926,9 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
     );
 
     debug!(
-        log,
-        "Downloaded attester duties";
-        "dependent_root" => %dependent_root,
-        "num_new_duties" => new_duties.len(),
+        %dependent_root,
+        num_new_duties = new_duties.len(),
+        "Downloaded attester duties"
     );
 
     // Update the duties service with the new `DutyAndProof` messages.
@@ -981,10 +959,9 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
                     && prior_duty_and_proof.duty == duty_and_proof.duty
                 {
                     warn!(
-                        log,
-                        "Redundant attester duty update";
-                        "dependent_root" => %dependent_root,
-                        "validator_index" => duty.validator_index,
+                        %dependent_root,
+                        validator_index = duty.validator_index,
+                        "Redundant attester duty update"
                     );
                     continue;
                 }
@@ -992,11 +969,10 @@ async fn poll_beacon_attesters_for_epoch<T: SlotClock + 'static, E: EthSpec>(
                 // Using `already_warned` avoids excessive logs.
                 if dependent_root != *prior_dependent_root && already_warned.take().is_some() {
                     warn!(
-                        log,
-                        "Attester duties re-org";
-                        "prior_dependent_root" => %prior_dependent_root,
-                        "dependent_root" => %dependent_root,
-                        "note" => "this may happen from time to time"
+                        %prior_dependent_root,
+                        %dependent_root,
+                        note = "this may happen from time to time",
+                        "Attester duties re-org"
                     )
                 }
                 *mut_value = (dependent_root, duty_and_proof);
@@ -1108,8 +1084,6 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
     duties: Vec<AttesterData>,
     dependent_root: Hash256,
 ) {
-    let log = duties_service.context.log();
-
     // Sort duties by slot in a BTreeMap.
     let mut duties_by_slot: BTreeMap<Slot, Vec<_>> = BTreeMap::new();
 
@@ -1177,20 +1151,18 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                         // A pubkey can be missing when a validator was recently
                         // removed via the API.
                         warn!(
-                            log,
-                            "Missing pubkey for duty and proof";
-                            "info" => "a validator may have recently been removed from this VC",
-                            "pubkey" => ?pubkey,
+                            info = "a validator may have recently been removed from this VC",
+                            ?pubkey,
+                            "Missing pubkey for duty and proof"
                         );
                         // Do not abort the entire batch for a single failure.
                         continue;
                     }
                     Err(e) => {
                         error!(
-                            log,
-                            "Failed to produce duty and proof";
-                            "error" => ?e,
-                            "msg" => "may impair attestation duties"
+                            error = ?e,
+                            msg = "may impair attestation duties",
+                            "Failed to produce duty and proof"
                         );
                         // Do not abort the entire batch for a single failure.
                         continue;
@@ -1215,9 +1187,8 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             // Our selection proofs are no longer relevant due to a reorg, abandon
                             // this entire background process.
                             debug!(
-                                log,
-                                "Stopping selection proof background task";
-                                "reason" => "re-org"
+                                reason = "re-org",
+                                "Stopping selection proof background task"
                             );
                             return;
                         }
@@ -1240,11 +1211,10 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             let time_taken_ms =
                 Duration::from_secs_f64(timer.map_or(0.0, |t| t.stop_and_record())).as_millis();
             debug!(
-                log,
-                "Computed attestation selection proofs";
-                "batch_size" => batch_size,
-                "lookahead_slot" => lookahead_slot,
-                "time_taken_ms" => time_taken_ms
+                batch_size,
+                %lookahead_slot,
+                time_taken_ms,
+                "Computed attestation selection proofs"
             );
         } else {
             // Just sleep for one slot if we are unable to read the system clock, this gives
@@ -1268,9 +1238,6 @@ async fn poll_beacon_inclusion_list_duties<T: SlotClock + 'static, E: EthSpec>(
     duties_service: &Arc<DutiesService<T, E>>,
 ) -> Result<(), Error> {
     // TODO: add timer metric for current epoch
-
-    let log = duties_service.context.log();
-
     let current_slot = duties_service
         .slot_clock
         .now()
@@ -1306,11 +1273,9 @@ async fn poll_beacon_inclusion_list_duties<T: SlotClock + 'static, E: EthSpec>(
     .await
     {
         error!(
-            log,
-            "Failed to download inclusion list duties";
-            "current_epoch" => current_epoch,
-            "request_epoch" => current_epoch,
-            "err" => ?e,
+            error = ?e,
+            ?current_epoch,
+            "Failed to download inclusion list duties",
         )
     }
 
@@ -1328,11 +1293,9 @@ async fn poll_beacon_inclusion_list_duties<T: SlotClock + 'static, E: EthSpec>(
     .await
     {
         error!(
-            log,
-            "Failed to download inclusion list duties";
-            "current_epoch" => current_epoch,
-            "request_epoch" => next_epoch,
-            "err" => ?e,
+            error = ?e,
+            ?current_epoch,
+            "Failed to download inclusion list duties",
         )
     }
 
@@ -1358,14 +1321,11 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
     local_indices: &[u64],
     local_pubkeys: &HashSet<PublicKeyBytes>,
 ) -> Result<(), Error> {
-    let log = duties_service.context.log();
-
     // No need to bother the BN if we don't have any validators.
     if local_indices.is_empty() {
         debug!(
-            duties_service.context.log(),
-            "No validators, not downloading inclusion list duties";
-            "epoch" => epoch,
+            ?epoch,
+            "No validators, not downloading inclusion list duties",
         );
         return Ok(());
     }
@@ -1388,11 +1348,7 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
         post_validator_duties_inclusion_list(duties_service, epoch, initial_indices_to_request)
             .await?;
 
-    debug!(
-        log,
-        "inclusion list duties";
-        "count" => response.data.len(),
-    );
+    debug!(count = response.data.len(), "inclusion list duties",);
     let dependent_root = response.dependent_root;
 
     // Find any validators which have conflicting (epoch, dependent_root) values or missing duties for the epoch.
@@ -1443,10 +1399,9 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
     // TODO: add store metric
 
     debug!(
-        log,
-        "Downloaded inclusion list duties";
-        "dependent_root" => %dependent_root,
-        "num_new_duties" => new_duties.len(),
+        %dependent_root,
+        num_new_duties = new_duties.len(),
+        "Downloaded inclusion list duties",
     );
 
     // Update the duties service with the new `InclusionListDuty` messages.
@@ -1469,14 +1424,13 @@ async fn poll_beacon_inclusion_list_duties_for_epoch<T: SlotClock + 'static, E: 
                 // information that we store aside from the duty itself. There is no selection proof
                 // to compute, and there are no subscriptions to keep track of.
 
-                // NOTE: We could use a flag here to avoid redundant logs.
+                // TODO(focil) this may be a redundant log
                 if dependent_root != *prior_dependent_root {
-                    warn!(
-                        log,
-                        "Inclusion list duties re-org";
-                        "prior_dependent_root" => %prior_dependent_root,
-                        "dependent_root" => %dependent_root,
-                        "note" => "this may happen from time to time"
+                    debug!(
+                        %prior_dependent_root,
+                        %dependent_root,
+                        note = "this may happen from time to time",
+                        "Inclusion list duties re-org",
                     )
                 }
                 *mut_value = (dependent_root, duty);
@@ -1541,8 +1495,6 @@ async fn poll_beacon_proposers<T: SlotClock + 'static, E: EthSpec>(
         &[validator_metrics::UPDATE_PROPOSERS],
     );
 
-    let log = duties_service.context.log();
-
     let current_slot = duties_service
         .slot_clock
         .now()
@@ -1558,7 +1510,6 @@ async fn poll_beacon_proposers<T: SlotClock + 'static, E: EthSpec>(
         &initial_block_proposers,
         block_service_tx,
         &duties_service.validator_store,
-        log,
     )
     .await;
 
@@ -1597,10 +1548,9 @@ async fn poll_beacon_proposers<T: SlotClock + 'static, E: EthSpec>(
                     .collect::<Vec<_>>();
 
                 debug!(
-                    log,
-                    "Downloaded proposer duties";
-                    "dependent_root" => %dependent_root,
-                    "num_relevant_duties" => relevant_duties.len(),
+                    %dependent_root,
+                    num_relevant_duties = relevant_duties.len(),
+                    "Downloaded proposer duties"
                 );
 
                 if let Some((prior_dependent_root, _)) = duties_service
@@ -1610,20 +1560,18 @@ async fn poll_beacon_proposers<T: SlotClock + 'static, E: EthSpec>(
                 {
                     if dependent_root != prior_dependent_root {
                         warn!(
-                            log,
-                            "Proposer duties re-org";
-                            "prior_dependent_root" => %prior_dependent_root,
-                            "dependent_root" => %dependent_root,
-                            "msg" => "this may happen from time to time"
+                            %prior_dependent_root,
+                            %dependent_root,
+                            msg = "this may happen from time to time",
+                            "Proposer duties re-org"
                         )
                     }
                 }
             }
             // Don't return early here, we still want to try and produce blocks using the cached values.
             Err(e) => error!(
-                log,
-                "Failed to download proposer duties";
-                "err" => %e,
+                err = %e,
+                "Failed to download proposer duties"
             ),
         }
 
@@ -1648,13 +1596,11 @@ async fn poll_beacon_proposers<T: SlotClock + 'static, E: EthSpec>(
                 &additional_block_producers,
                 block_service_tx,
                 &duties_service.validator_store,
-                log,
             )
             .await;
             debug!(
-                log,
-                "Detected new block proposer";
-                "current_slot" => current_slot,
+                %current_slot,
+                "Detected new block proposer"
             );
             validator_metrics::inc_counter(&validator_metrics::PROPOSAL_CHANGED);
         }
@@ -1675,7 +1621,6 @@ async fn notify_block_production_service<T: SlotClock + 'static, E: EthSpec>(
     block_proposers: &HashSet<PublicKeyBytes>,
     block_service_tx: &mut Sender<BlockServiceNotification>,
     validator_store: &ValidatorStore<T, E>,
-    log: &Logger,
 ) {
     let non_doppelganger_proposers = block_proposers
         .iter()
@@ -1692,10 +1637,9 @@ async fn notify_block_production_service<T: SlotClock + 'static, E: EthSpec>(
             .await
         {
             error!(
-                log,
-                "Failed to notify block service";
-                "current_slot" => current_slot,
-                "error" => %e
+                %current_slot,
+                error = %e,
+                "Failed to notify block service"
             );
         };
     }
