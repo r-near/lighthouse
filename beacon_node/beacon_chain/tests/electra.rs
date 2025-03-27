@@ -39,8 +39,9 @@ async fn signature_verify_chain_segment_pubkey_cache() {
 
     // FIXME: Probably need to make this deterministic?
     let new_keypair = Keypair::random();
+    let new_validator_pk_bytes = PublicKeyBytes::from(&new_keypair.pk);
     let withdrawal_credentials = Hash256::ZERO;
-    let amount = spec.max_effective_balance_electra;
+    let amount = spec.min_per_epoch_churn_limit_electra;
     let deposit_data = harness.make_deposit_data(&new_keypair, withdrawal_credentials, amount);
     let deposit_request = DepositRequest {
         pubkey: deposit_data.pubkey,
@@ -95,12 +96,50 @@ async fn signature_verify_chain_segment_pubkey_cache() {
     assert_eq!(post_block_state.pending_deposits().unwrap().len(), 1);
     assert_eq!(post_block_state.validators().len(), initial_validator_count);
 
-    // Finalize deposit.
-    // FIXME(sproul): this was intended just for testing, but it doesn't work yet
-    Box::pin(harness.extend_to_slot(deposit_slot + 2 * E::slots_per_epoch() + 2)).await;
-    let finalized_deposit_state = harness.get_current_state();
+    // Advance to one slot before the finalization of the deposit.
+    Box::pin(harness.extend_to_slot(deposit_slot + 2 * E::slots_per_epoch())).await;
+    let pre_finalized_deposit_state = harness.get_current_state();
     assert_eq!(
-        finalized_deposit_state.validators().len(),
-        initial_validator_count + 1
+        pre_finalized_deposit_state.validators().len(),
+        initial_validator_count
+    );
+
+    // New validator should not be in the pubkey cache yet.
+    assert_eq!(
+        harness
+            .chain
+            .validator_index(&new_validator_pk_bytes)
+            .unwrap(),
+        None
+    );
+    let new_validator_index = initial_validator_count as u64;
+
+    // Keep producing blocks (but not processing them) until we find one signed by our new
+    // validator.
+    // FIXME: probably need to use the harness so we can prepare payloads properly
+    let mut state = pre_finalized_deposit_state;
+    let mut slot = state.slot() + 1;
+    let mut blocks = vec![];
+    loop {
+        let (block, post_state) = harness.make_block(state, slot).await;
+        let proposer_index = block.0.message().proposer_index();
+
+        blocks.push(block);
+
+        state = post_state;
+        slot = slot + 1;
+
+        if proposer_index == new_validator_index {
+            break;
+        }
+    }
+
+    // New validator should still not be in the pubkey cache yet.
+    assert_eq!(
+        harness
+            .chain
+            .validator_index(&new_validator_pk_bytes)
+            .unwrap(),
+        None
     );
 }
