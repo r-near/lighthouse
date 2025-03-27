@@ -2228,6 +2228,23 @@ where
         ((Arc::new(signed_block), blobs), state)
     }
 
+    pub fn make_deposit_data(
+        &self,
+        keypair: &Keypair,
+        withdrawal_credentials: Hash256,
+        amount: u64,
+    ) -> DepositData {
+        let pubkey = PublicKeyBytes::from(keypair.pk.clone());
+        let mut data = DepositData {
+            pubkey,
+            withdrawal_credentials,
+            amount,
+            signature: SignatureBytes::empty(),
+        };
+        data.signature = data.create_signature(&keypair.sk, &self.spec);
+        data
+    }
+
     pub fn make_deposits<'a>(
         &self,
         state: &'a mut BeaconState<E>,
@@ -2239,19 +2256,14 @@ where
 
         for _ in 0..num_deposits {
             let keypair = Keypair::random();
-            let pubkeybytes = PublicKeyBytes::from(keypair.pk.clone());
-
-            let mut data = DepositData {
-                pubkey: pubkeybytes,
-                withdrawal_credentials: Hash256::from_slice(
-                    &get_withdrawal_credentials(&keypair.pk, self.spec.bls_withdrawal_prefix_byte)
-                        [..],
-                ),
-                amount: self.spec.min_deposit_amount,
-                signature: SignatureBytes::empty(),
-            };
-
-            data.signature = data.create_signature(&keypair.sk, &self.spec);
+            let withdrawal_credentials = Hash256::from_slice(
+                &get_withdrawal_credentials(&keypair.pk, self.spec.bls_withdrawal_prefix_byte)[..],
+            );
+            let mut data = self.make_deposit_data(
+                &keypair,
+                withdrawal_credentials,
+                self.spec.min_deposit_amount,
+            );
 
             if let Some(invalid_pubkey) = invalid_pubkey {
                 data.pubkey = invalid_pubkey;

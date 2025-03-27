@@ -3,6 +3,7 @@ mod attestation_verification;
 mod bellatrix;
 mod block_verification;
 mod capella;
+mod electra;
 mod events;
 mod op_verification;
 mod payload_invalidation;
