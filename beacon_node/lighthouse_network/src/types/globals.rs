@@ -32,20 +32,23 @@ pub struct NetworkGlobals<E: EthSpec> {
     all_sampling_subnets: Vec<DataColumnSubnetId>,
     all_sampling_columns: Vec<ColumnIndex>,
     /// Dynamic custody group count (CGC)
-    custody_group_count: RwLock<CustodyGroupCount>,
+    cgc_updates: RwLock<CGCUpdates>,
     /// Network-related configuration. Immutable after initialization.
     pub config: Arc<NetworkConfig>,
     /// Ethereum chain configuration. Immutable after initialization.
     pub spec: Arc<ChainSpec>,
 }
 
-struct CustodyGroupCount {
-    value: u64,
+pub struct CGCUpdates {
+    initial_value: u64,
+    updates: Vec<(Slot, u64)>,
+    // TODO(das): Track backfilled CGC
 }
 
 impl<E: EthSpec> NetworkGlobals<E> {
     pub fn new(
         enr: Enr,
+        cgc_updates: CGCUpdates,
         trusted_peers: Vec<PeerId>,
         disable_peer_scoring: bool,
         config: Arc<NetworkConfig>,
@@ -82,7 +85,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
             backfill_state: RwLock::new(BackFillState::Paused),
             all_sampling_subnets,
             all_sampling_columns,
-            custody_group_count: RwLock::new(CustodyGroupCount { value: 0 }),
+            cgc_updates: RwLock::new(cgc_updates),
             config,
             spec,
         }
@@ -157,8 +160,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
 
     /// Returns the custody group count (CGC)
     fn custody_group_count(&self, slot: Slot) -> u64 {
-        let cgc = self.custody_group_count.read().value;
-        todo!("CGC at slot {slot} {cgc}");
+        self.cgc_updates.read().at_slot(slot)
     }
 
     /// Returns the count of custody columns this node must sample for block import
@@ -167,6 +169,11 @@ impl<E: EthSpec> NetworkGlobals<E> {
         self.spec
             .sampling_size(self.custody_group_count(slot))
             .expect("should compute node sampling size from valid chain spec")
+    }
+
+    /// Adds a new CGC value update
+    pub fn add_cgc_update(&self, update: (Slot, u64)) {
+        self.cgc_updates.write().add_latest_update(update);
     }
 
     /// Returns the number of libp2p connected peers.
@@ -266,7 +273,32 @@ impl<E: EthSpec> NetworkGlobals<E> {
         let keypair = libp2p::identity::secp256k1::Keypair::generate();
         let enr_key: discv5::enr::CombinedKey = discv5::enr::CombinedKey::from_secp256k1(&keypair);
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
-        NetworkGlobals::new(enr, trusted_peers, false, config, spec)
+        let cgc_updates = CGCUpdates::new(spec.custody_requirement);
+        NetworkGlobals::new(enr, cgc_updates, trusted_peers, false, config, spec)
+    }
+}
+
+impl CGCUpdates {
+    pub fn new(initial_value: u64) -> Self {
+        Self {
+            initial_value,
+            updates: vec![],
+        }
+    }
+
+    fn at_slot(&self, slot: Slot) -> u64 {
+        // TODO: Test and fix logic
+        for (update_slot, cgc) in &self.updates {
+            if slot > *update_slot {
+                return *cgc;
+            }
+        }
+
+        self.initial_value
+    }
+
+    fn add_latest_update(&mut self, update: (Slot, u64)) {
+        self.updates.push(update);
     }
 }
 

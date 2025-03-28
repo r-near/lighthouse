@@ -15,7 +15,7 @@ use crate::rpc::{
 };
 use crate::types::{
     all_topics_at_fork, core_topics_to_subscribe, is_fork_non_core_topic, subnet_from_topic_hash,
-    GossipEncoding, GossipKind, GossipTopic, SnappyTransform, Subnet, SubnetDiscovery,
+    CGCUpdates, GossipEncoding, GossipKind, GossipTopic, SnappyTransform, Subnet, SubnetDiscovery,
 };
 use crate::EnrExt;
 use crate::Eth2Enr;
@@ -196,9 +196,16 @@ impl<E: EthSpec> Network<E> {
             &ctx.chain_spec,
         )?;
 
+        // TODO: Load from disk, and check consistency with DB somewhere
+        let initial_cgc = ctx
+            .chain_spec
+            .custody_group_count(config.subscribe_all_data_column_subnets);
+        let cgc_updates = CGCUpdates::new(initial_cgc);
+
         // Construct the metadata
         let globals = NetworkGlobals::new(
             enr,
+            cgc_updates,
             trusted_peers,
             config.disable_peer_scoring,
             config.clone(),

@@ -1194,6 +1194,7 @@ impl<E: EthSpec> Discovery<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CGCUpdates;
     use libp2p::identity::secp256k1;
     use types::{BitVector, MinimalEthSpec, SubnetId};
 
@@ -1207,7 +1208,15 @@ mod tests {
         let config = Arc::new(config);
         let enr_key: CombinedKey = CombinedKey::from_secp256k1(&keypair);
         let enr: Enr = build_enr::<E>(&enr_key, &config, &EnrForkId::default(), &spec).unwrap();
-        let globals = NetworkGlobals::new(enr, vec![], false, config.clone(), spec.clone());
+        let cgc_updates = CGCUpdates::new(spec.custody_requirement);
+        let globals = NetworkGlobals::new(
+            enr,
+            cgc_updates,
+            vec![],
+            false,
+            config.clone(),
+            spec.clone(),
+        );
         let keypair = keypair.into();
         Discovery::new(keypair, &config, Arc::new(globals), &spec)
             .await

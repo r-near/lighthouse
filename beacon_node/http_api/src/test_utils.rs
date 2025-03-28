@@ -14,7 +14,7 @@ use lighthouse_network::{
         behaviour::{ConnectionEstablished, FromSwarm},
         ConnectionId, NetworkBehaviour,
     },
-    types::SyncState,
+    types::{CGCUpdates, SyncState},
     ConnectedPoint, Enr, NetworkConfig, NetworkGlobals, PeerId, PeerManager,
 };
 use network::{NetworkReceivers, NetworkSenders};
@@ -140,8 +140,10 @@ pub async fn create_api_server_with_config<T: BeaconChainTypes>(
     let enr_key = CombinedKey::generate_secp256k1();
     let enr = Enr::builder().build(&enr_key).unwrap();
     let network_config = Arc::new(NetworkConfig::default());
+    let cgc_updates = CGCUpdates::new(chain.spec.custody_requirement);
     let network_globals = Arc::new(NetworkGlobals::new(
         enr.clone(),
+        cgc_updates,
         vec![],
         false,
         network_config,
