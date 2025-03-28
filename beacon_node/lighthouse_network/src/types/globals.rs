@@ -107,6 +107,8 @@ impl<E: EthSpec> NetworkGlobals<E> {
         *self.peer_id.read()
     }
 
+    // TODO: Must keep consistency between the persisted `local_enr` and the return of this
+    // function. Otherwise peers may downscore us and the network will have issues.
     pub fn local_metadata(&self) -> MetaData<E> {
         let enr = self.local_enr();
         let attnets = enr
@@ -155,7 +157,9 @@ impl<E: EthSpec> NetworkGlobals<E> {
     }
 
     fn public_custody_group_count(&self) -> u64 {
-        todo!();
+        // TODO(das): delay announcing the public custody count for the duration of the pruning
+        // period
+        self.cgc_updates.read().at_slot(Slot::new(u64::MAX))
     }
 
     /// Returns the custody group count (CGC)
@@ -253,19 +257,13 @@ impl<E: EthSpec> NetworkGlobals<E> {
         config: Arc<NetworkConfig>,
         spec: Arc<ChainSpec>,
     ) -> NetworkGlobals<E> {
-        let metadata = MetaData::V3(MetaDataV3 {
-            seq_number: 0,
-            attnets: Default::default(),
-            syncnets: Default::default(),
-            custody_group_count: spec.custody_requirement,
-        });
-        Self::new_test_globals_with_metadata(trusted_peers, metadata, config, spec)
+        let initial_cgc = spec.custody_requirement;
+        Self::new_test_globals_with_initial_cgc(trusted_peers, initial_cgc, config, spec)
     }
 
-    pub(crate) fn new_test_globals_with_metadata(
+    pub(crate) fn new_test_globals_with_initial_cgc(
         trusted_peers: Vec<PeerId>,
-        // TODO: todo! Apply to enr
-        _metadata: MetaData<E>,
+        initial_cgc: u64,
         config: Arc<NetworkConfig>,
         spec: Arc<ChainSpec>,
     ) -> NetworkGlobals<E> {
@@ -273,7 +271,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
         let keypair = libp2p::identity::secp256k1::Keypair::generate();
         let enr_key: discv5::enr::CombinedKey = discv5::enr::CombinedKey::from_secp256k1(&keypair);
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
-        let cgc_updates = CGCUpdates::new(spec.custody_requirement);
+        let cgc_updates = CGCUpdates::new(initial_cgc);
         NetworkGlobals::new(enr, cgc_updates, trusted_peers, false, config, spec)
     }
 }
@@ -316,13 +314,12 @@ mod test {
 
         let custody_group_count = spec.number_of_custody_groups / 2;
         let subnet_sampling_size = spec.sampling_size(custody_group_count).unwrap();
-        let metadata = get_metadata(custody_group_count);
         let config = Arc::new(NetworkConfig::default());
         let slot = Slot::new(0);
 
-        let globals = NetworkGlobals::<E>::new_test_globals_with_metadata(
+        let globals = NetworkGlobals::<E>::new_test_globals_with_initial_cgc(
             vec![],
-            metadata,
+            custody_group_count,
             config,
             Arc::new(spec),
         );
@@ -340,13 +337,12 @@ mod test {
 
         let custody_group_count = spec.number_of_custody_groups / 2;
         let subnet_sampling_size = spec.sampling_size(custody_group_count).unwrap();
-        let metadata = get_metadata(custody_group_count);
         let config = Arc::new(NetworkConfig::default());
         let slot = Slot::new(0);
 
-        let globals = NetworkGlobals::<E>::new_test_globals_with_metadata(
+        let globals = NetworkGlobals::<E>::new_test_globals_with_initial_cgc(
             vec![],
-            metadata,
+            custody_group_count,
             config,
             Arc::new(spec),
         );
@@ -354,14 +350,5 @@ mod test {
             globals.sampling_columns(slot).len(),
             subnet_sampling_size as usize
         );
-    }
-
-    fn get_metadata(custody_group_count: u64) -> MetaData<E> {
-        MetaData::V3(MetaDataV3 {
-            seq_number: 0,
-            attnets: Default::default(),
-            syncnets: Default::default(),
-            custody_group_count,
-        })
     }
 }
