@@ -3,9 +3,10 @@
 use beacon_chain::{
     builder::BeaconChainBuilder,
     test_utils::{get_kzg, mock_execution_layer_from_parts, BeaconChainHarness, DiskHarnessType},
-    ChainConfig, MigratorConfig, StateSkipConfig,
+    ChainConfig, MigratorConfig, NotifyExecutionLayer, StateSkipConfig,
 };
 use logging::test_logger;
+use slog::debug;
 use slot_clock::{SlotClock, TestingSlotClock};
 use state_processing::{
     per_block_processing, BlockSignatureStrategy, ConsensusContext, VerifyBlockRoot,
@@ -140,7 +141,7 @@ async fn signature_verify_chain_segment_pubkey_cache() {
         pre_finalized_deposit_state.validators().len(),
         initial_validator_count
     );
-    let new_epoch_start_slot = pre_finalized_deposit_state.slot() + E::slots_per_epoch() + 1;
+    let new_epoch_start_slot = pre_finalized_deposit_state.slot() + 3 * E::slots_per_epoch() + 1;
 
     // New validator should not be in the pubkey cache yet.
     assert_eq!(
@@ -152,11 +153,9 @@ async fn signature_verify_chain_segment_pubkey_cache() {
     );
     let new_validator_index = initial_validator_count;
 
-    // Produce blocks in the next epoch. Statistically one of these should be signed by our new
+    // Produce blocks in the next 3 epochs. Statistically one of these should be signed by our new
     // validator (99% probability).
     harness.extend_to_slot(new_epoch_start_slot).await;
-
-    let chain_dump = harness.chain.chain_dump();
 
     // New validator should be in the pubkey cache now.
     assert_eq!(
@@ -212,25 +211,80 @@ async fn signature_verify_chain_segment_pubkey_cache() {
         .unwrap();
     let (shutdown_tx, _shutdown_rx) = futures::channel::mpsc::channel(1);
 
-    let beacon_chain = BeaconChainBuilder::<DiskHarnessType<E>>::new(MainnetEthSpec, kzg)
-        .store(store.clone())
-        .custom_spec(spec.clone())
-        .task_executor(harness.chain.task_executor.clone())
-        .logger(harness.runtime.log.clone())
-        .weak_subjectivity_state(
-            checkpoint_state,
-            checkpoint_block.clone(),
-            checkpoint_blobs_opt.clone(),
-            genesis_state,
-        )
-        .unwrap()
-        .shutdown_sender(shutdown_tx)
-        .store_migrator_config(MigratorConfig::default().blocking())
-        .dummy_eth1_backend()
-        .expect("should build dummy backend")
-        .slot_clock(slot_clock)
-        .chain_config(ChainConfig::default())
-        .execution_layer(Some(mock.el))
-        .build()
-        .expect("should build");
+    let log = harness.runtime.log.clone();
+    let beacon_chain = Arc::new(
+        BeaconChainBuilder::<DiskHarnessType<E>>::new(MainnetEthSpec, kzg)
+            .store(store.clone())
+            .custom_spec(spec.clone())
+            .task_executor(harness.chain.task_executor.clone())
+            .logger(harness.runtime.log.clone())
+            .weak_subjectivity_state(
+                checkpoint_state,
+                checkpoint_block.clone(),
+                checkpoint_blobs_opt.clone(),
+                genesis_state,
+            )
+            .unwrap()
+            .shutdown_sender(shutdown_tx)
+            .store_migrator_config(MigratorConfig::default().blocking())
+            .dummy_eth1_backend()
+            .expect("should build dummy backend")
+            .slot_clock(slot_clock)
+            .chain_config(ChainConfig::default())
+            .execution_layer(Some(mock.el))
+            .build()
+            .expect("should build"),
+    );
+
+    let chain_dump = harness.chain.chain_dump().unwrap();
+    let new_blocks = chain_dump
+        .iter()
+        .filter(|snapshot| snapshot.beacon_block.slot() > checkpoint_slot);
+
+    let mut chain_segment = vec![];
+    let mut new_proposer_present = false;
+    for snapshot in new_blocks {
+        let block_root = snapshot.beacon_block_root;
+        let full_block = harness.chain.get_block(&block_root).await.unwrap().unwrap();
+
+        new_proposer_present |= full_block.message().proposer_index() == new_validator_index as u64;
+
+        println!(
+            "Proposal from validator {} at slot {}",
+            full_block.message().proposer_index(),
+            full_block.slot()
+        );
+
+        chain_segment
+            .push(harness.build_rpc_block_from_store_blobs(Some(block_root), Arc::new(full_block)));
+    }
+    assert_ne!(chain_segment.len(), 0);
+
+    // This should succeed despite the new validator index being unknown to the checkpoint synced
+    // chain.
+    /*
+    assert!(
+        new_proposer_present,
+        "new proposer should be part of chain segment"
+    );
+    */
+    assert_eq!(
+        beacon_chain
+            .validator_index(&new_validator_pk_bytes)
+            .unwrap(),
+        None,
+    );
+    beacon_chain
+        .process_chain_segment(chain_segment, NotifyExecutionLayer::Yes)
+        .await
+        .into_block_error()
+        .unwrap();
+
+    // Processing the chain segment should add the new validator to the cache.
+    assert_eq!(
+        beacon_chain
+            .validator_index(&new_validator_pk_bytes)
+            .unwrap(),
+        Some(new_validator_index),
+    );
 }
