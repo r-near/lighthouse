@@ -1,6 +1,6 @@
 use crate::duties_service::{DutiesService, Error};
 use doppelganger_service::DoppelgangerStatus;
-use eth2::types::SyncCommitteeSelection;
+use eth2::types::{Signature, SyncCommitteeSelection};
 use futures::future::join_all;
 use logging::crit;
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -527,39 +527,33 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 // Construct proof for prior slot.
                 let proof_slot = slot - 1;
 
-                // Create futures for all subnet IDs for this validator
-                for subnet_id in subnet_ids {
+                // Store all partial sync selection proofs in partial_proofs so that it can be sent together later
+                sync_committee_selection.extend(subnet_ids.iter().map(|&subnet_id| {
                     let duties_service = duties_service.clone();
                     let duty = duty.clone();
-                    let subnet_id = *subnet_id;
-
-                    // Store all partial sync selection proofs in partial_proofs so that it can be sent together later
-                    sync_committee_selection.push(async move {
+                    async move {
                         // Produce partial selection proof
                         let partial_sync_selection_proof = duties_service
                             .validator_store
-                            .produce_sync_selection_proof(
-                                &duty.pubkey,
-                                proof_slot,
-                                subnet_id.into(),
-                            )
+                            .produce_sync_selection_proof(&duty.pubkey, proof_slot, subnet_id)
                             .await;
 
                         match partial_sync_selection_proof {
                             Ok(proof) => {
-                                let sync_committee_selection = SyncCommitteeSelection {
-                                    validator_index: duty.validator_index,
-                                    slot: proof_slot,
-                                    subcommittee_index: subnet_id,
-                                    selection_proof: proof.clone().into(),
-                                };
                                 debug!(
                                     "validator_index" = duty.validator_index,
                                     "slot" = %proof_slot,
-                                    "subcommittee_index" = subnet_id,
-                                    "partial selection proof"  = ?proof,
+                                    "subcommittee_index" = *subnet_id,
+                                    "partial selection proof"  = ?Signature::from(proof.clone()),
                                     "Sending sync selection to middleware"
                                 );
+
+                                let sync_committee_selection = SyncCommitteeSelection {
+                                    validator_index: duty.validator_index,
+                                    slot: proof_slot,
+                                    subcommittee_index: *subnet_id,
+                                    selection_proof: proof.clone().into(),
+                                };
                                 Some(sync_committee_selection)
                             }
                             Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
@@ -580,13 +574,13 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                 None
                             }
                         }
-                    });
-                }
+                    }
+                }));
             }
 
             let sync_committee_selection_data = join_all(sync_committee_selection).await;
 
-            // Filter out None values and extract the selection proofs
+            // Collect the SyncCommitteeSelection data
             let sync_selection_data: Vec<_> = sync_committee_selection_data
                 .into_iter()
                 .flatten()
