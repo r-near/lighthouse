@@ -510,9 +510,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
         if duties_service.distributed {
             let mut sync_committee_selection = Vec::new();
 
-            for (_validator_start_slot, duty) in pre_compute_duties {
-                // Proofs are already known at this slot for this validator.
-
+            for (_, duty) in pre_compute_duties {
                 let subnet_ids = match duty.subnet_ids::<E>() {
                     Ok(subnet_ids) => subnet_ids,
                     Err(e) => {
