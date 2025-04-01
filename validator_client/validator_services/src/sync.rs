@@ -504,14 +504,14 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
     current_slot: Slot,
     pre_compute_slot: Slot,
 ) {
+    debug!(
+        period = sync_committee_period,
+        %current_slot,
+        %pre_compute_slot,
+        "Calculating sync selection proofs"
+    );
     // Generate selection proofs for each validator at each slot, one slot at a time.
     for slot in (current_slot.as_u64()..=pre_compute_slot.as_u64()).map(Slot::new) {
-        debug!(
-            period = sync_committee_period,
-            %current_slot,
-            %pre_compute_slot,
-            "Calculating sync selection proofs"
-        );
         if !duties_service.distributed {
             // For non-distributed mode
             let mut validator_proofs = vec![];
