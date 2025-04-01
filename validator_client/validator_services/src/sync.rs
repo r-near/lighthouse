@@ -557,7 +557,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     "validator_index" = duty.validator_index,
                                     "slot" = %proof_slot,
                                     "subcommittee_index" = subnet_id,
-                                    "partial sync selection proof"  = ?proof,
+                                    "partial selection proof"  = ?proof,
                                     "Sending sync selection to middleware"
                                 );
                                 Some(sync_committee_selection)
@@ -606,15 +606,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
 
             match middleware_response {
                 Ok(response) => {
-                    // The selection proof from middleware response will be a full selection proof
-                    debug!(
-                        "validator_index" = response.data[0].validator_index,
-                        "slot" = %response.data[0].slot,
-                        "subcommittee_index" = response.data[0].subcommittee_index,
-                        "full sync selection proof" = ?response.data[0].selection_proof,
-                        "Received sync selection from middleware"
-                    );
-
                     // Get the sync map to update duties
                     let sync_map = duties_service.sync_duties.committees.read();
                     let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
@@ -624,8 +615,16 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
 
                     let validators = committee_duties.validators.read();
 
-                    // Process each response
+                    // Process each middleware response
                     for response_data in response.data.iter() {
+                        // The selection proof from middleware response will be a full selection proof
+                        debug!(
+                            "validator_index" = response_data.validator_index,
+                            "slot" = %response_data.slot,
+                            "subcommittee_index" = response_data.subcommittee_index,
+                            "full selection proof" = ?response_data.selection_proof,
+                            "Received sync selection from middleware"
+                        );
                         let validator_index = response_data.validator_index;
                         let slot = response_data.slot;
                         let subcommittee_index = response_data.subcommittee_index;
