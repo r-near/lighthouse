@@ -134,8 +134,7 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
 ) -> Result<Option<SelectionProof>, Error> {
     let selection_proof = if distributed {
-        // Submit a partial selection proof in the data field of the POST HTTP endpoint
-        let selection = BeaconCommitteeSelection {
+        let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
             selection_proof: validator_store
@@ -145,38 +144,38 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 .into(),
         };
         // Call the endpoint /eth/v1/validator/beacon_committee_selections
-        // The middleware should return a full selection proof here
-        let response = beacon_nodes
+        // by sending the BeaconCommitteeSelection that contains partial selection proof
+        // The middleware should return BeaconCommitteeSelection that contains full selection proof
+        let middleware_response = beacon_nodes
             .first_success(|beacon_node| {
-                let selections = selection.clone();
+                let selection_data = beacon_committee_selection.clone();
                 debug!(
-                    "Selection proof" = ?selections,
-                    "Partial selection proof from VC"
+                    "validator_index" = duty.validator_index,
+                    "slot" = %duty.slot,
+                    "partial selection proof" = ?beacon_committee_selection.selection_proof,
+                    "Sending beacon committee selection to middleware"
                 );
-                // println!("Selection proof: {:?}", selections);
                 async move {
-                    let response = beacon_node
-                        .post_validator_beacon_committee_selections(&[selections])
-                        .await;
-
-                    debug!(?response, "Response from middleware");
-                    // println!("Response from middleware {:?}", response);
-
-                    response
+                    beacon_node
+                        .post_validator_beacon_committee_selections(&[selection_data])
+                        .await
                 }
             })
             .await;
-        SelectionProof::from(
-            response
-                .map_err(|e| {
-                    Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(
-                        e.to_string(),
-                    ))
-                })?
-                .data[0]
-                .selection_proof
-                .clone(),
-        )
+
+        let response_data = &middleware_response
+            .map_err(|e| {
+                Error::FailedToProduceSelectionProof(ValidatorStoreError::Middleware(e.to_string()))
+            })?
+            .data[0];
+
+        debug!(
+            "validator_index" = response_data.validator_index,
+            "slot" = %response_data.slot,
+            "full selection proof" = ?response_data.selection_proof,
+            "Received beacon committee selection from middleware"
+        );
+        SelectionProof::from(response_data.selection_proof.clone())
     } else {
         validator_store
             .produce_selection_proof(duty.pubkey, duty.slot)
