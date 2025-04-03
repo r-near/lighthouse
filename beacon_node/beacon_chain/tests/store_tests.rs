@@ -31,6 +31,7 @@ use store::{
     BlobInfo, DBColumn, HotColdDB, StoreConfig,
 };
 use tempfile::{tempdir, TempDir};
+use tracing::info;
 use types::test_utils::{SeedableRng, XorShiftRng};
 use types::*;
 
@@ -116,15 +117,16 @@ fn get_harness_generic(
     harness
 }
 
-fn count_states_descendant_of_block(
+fn get_states_descendant_of_block(
     store: &HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>>,
     block_root: Hash256,
-) -> usize {
+) -> Vec<(Hash256, Slot)> {
     let summaries = store.load_hot_state_summaries().unwrap();
     summaries
         .iter()
         .filter(|(_, s)| s.latest_block_root == block_root)
-        .count()
+        .map(|(state_root, summary)| (*state_root, summary.slot))
+        .collect()
 }
 
 #[tokio::test]
@@ -511,17 +513,18 @@ async fn epoch_boundary_state_attestation_processing() {
             .get_blinded_block(&block_root)
             .unwrap()
             .expect("block exists");
+        // Use get_state as the state may be finalized by this point
         let mut epoch_boundary_state = store
-            .load_hot_state(&block.state_root())
+            .get_state(&block.state_root(), None)
             .expect("no error")
-            .expect("epoch boundary state exists")
-            .0;
+            .unwrap_or_else(|| {
+                panic!("epoch boundary state should exist {:?}", block.state_root())
+            });
         let ebs_state_root = epoch_boundary_state.update_tree_hash_cache().unwrap();
         let mut ebs_of_ebs = store
-            .load_hot_state(&ebs_state_root)
+            .get_state(&ebs_state_root, None)
             .expect("no error")
-            .expect("ebs of ebs exists")
-            .0;
+            .unwrap_or_else(|| panic!("ebs of ebs should exist {ebs_state_root:?}"));
         ebs_of_ebs.apply_pending_mutations().unwrap();
         assert_eq!(epoch_boundary_state, ebs_of_ebs);
 
@@ -2155,7 +2158,8 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
 
     let slots_per_epoch = E::slots_per_epoch();
 
-    let genesis_state = harness.get_current_state();
+    let mut genesis_state = harness.get_current_state();
+    let genesis_state_root = genesis_state.update_tree_hash_cache().unwrap();
     let block_slot = Slot::new(2 * slots_per_epoch);
     let ((signed_block, _), state) = harness.make_block(genesis_state, block_slot).await;
 
@@ -2182,7 +2186,7 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
     // The bad block parent root is the genesis block root. There's `block_slot - 1` temporary
     // states to remove + the genesis state = block_slot.
     assert_eq!(
-        count_states_descendant_of_block(&store, bad_block_parent_root),
+        get_states_descendant_of_block(&store, bad_block_parent_root).len(),
         block_slot.as_usize(),
     );
 
@@ -2203,8 +2207,10 @@ async fn garbage_collect_temp_states_from_failed_block_on_finalization() {
     // Check that temporary states have been pruned. The genesis block is not a descendant of the
     // latest finalized checkpoint, so all its states have been pruned from the hot DB, = 0.
     assert_eq!(
-        count_states_descendant_of_block(&store, bad_block_parent_root),
-        0
+        get_states_descendant_of_block(&store, bad_block_parent_root),
+        // The genesis state is kept to support the HDiff grid
+        vec![(genesis_state_root, Slot::new(0))],
+        "get_states_descendant_of_block({bad_block_parent_root:?})"
     );
 }
 
@@ -2306,6 +2312,8 @@ async fn weak_subjectivity_sync_test(slots: Vec<Slot>, checkpoint_slot: Slot) {
         .get_state(&wss_state_root, Some(checkpoint_slot))
         .unwrap()
         .unwrap();
+    let wss_state_slot = wss_state.slot();
+    let wss_block_slot = wss_block.slot();
 
     // Add more blocks that advance finalization further.
     harness.advance_slot();
@@ -2397,12 +2405,14 @@ async fn weak_subjectivity_sync_test(slots: Vec<Slot>, checkpoint_slot: Slot) {
             .unwrap();
 
         let slot = full_block.slot();
+        let full_block_root = full_block.canonical_root();
         let state_root = full_block.state_root();
 
+        info!(block_root = ?full_block_root, ?state_root, %slot, "Importing block from chain dump");
         beacon_chain.slot_clock.set_slot(slot.as_u64());
         beacon_chain
             .process_block(
-                full_block.canonical_root(),
+                full_block_root,
                 harness.build_rpc_block_from_store_blobs(Some(block_root), Arc::new(full_block)),
                 NotifyExecutionLayer::Yes,
                 BlockImportSource::Lookup,
@@ -2489,8 +2499,19 @@ async fn weak_subjectivity_sync_test(slots: Vec<Slot>, checkpoint_slot: Slot) {
         HistoricalBlockError::InvalidSignature
     ));
 
+    let available_blocks_slots = available_blocks
+        .iter()
+        .map(|block| (block.block().slot(), block.block().canonical_root()))
+        .collect::<Vec<_>>();
+    info!(
+        ?available_blocks_slots,
+        "wss_block_slot" = wss_block.slot().as_usize(),
+        "Importing historical block batch"
+    );
+
     // Importing the batch with valid signatures should succeed.
     let available_blocks_dup = available_blocks.iter().map(clone_block).collect::<Vec<_>>();
+    assert_eq!(beacon_chain.store.get_oldest_block_slot(), wss_block.slot());
     beacon_chain
         .import_historical_block_batch(available_blocks_dup)
         .unwrap();
@@ -2500,6 +2521,17 @@ async fn weak_subjectivity_sync_test(slots: Vec<Slot>, checkpoint_slot: Slot) {
     beacon_chain
         .import_historical_block_batch(available_blocks)
         .unwrap();
+
+    // Sanity check for non-aligned WSS starts, to make sure the WSS block is persisted properly
+    if wss_block_slot != wss_state_slot {
+        let new_node_block_root_at_wss_block = beacon_chain
+            .store
+            .get_cold_block_root(wss_block_slot)
+            .unwrap()
+            .unwrap();
+        info!(?new_node_block_root_at_wss_block, %wss_block_slot);
+        assert_eq!(new_node_block_root_at_wss_block, wss_block.canonical_root());
+    }
 
     // The forwards iterator should now match the original chain
     let forwards = beacon_chain
@@ -2551,11 +2583,25 @@ async fn weak_subjectivity_sync_test(slots: Vec<Slot>, checkpoint_slot: Slot) {
     }
 
     // Anchor slot is still set to the slot of the checkpoint block.
-    assert_eq!(store.get_anchor_info().anchor_slot, wss_block.slot());
+    // Note: since hot tree states the anchor slot is set to the aligned ws state slot
+    // https://github.com/sigp/lighthouse/pull/6750
+    let wss_aligned_slot = if checkpoint_slot % E::slots_per_epoch() == 0 {
+        checkpoint_slot
+    } else {
+        (checkpoint_slot.epoch(E::slots_per_epoch()) + Epoch::new(1))
+            .start_slot(E::slots_per_epoch())
+    };
+    assert_eq!(store.get_anchor_info().anchor_slot, wss_aligned_slot);
+    assert_eq!(
+        store.get_anchor_info().state_upper_limit,
+        Slot::new(u64::MAX)
+    );
+    info!(anchor = ?store.get_anchor_info(), "anchor pre");
 
     // Reconstruct states.
     store.clone().reconstruct_historic_states(None).unwrap();
-    assert_eq!(store.get_anchor_info().anchor_slot, 0);
+    assert_eq!(store.get_anchor_info().anchor_slot, wss_aligned_slot);
+    assert_eq!(store.get_anchor_info().state_upper_limit, Slot::new(0));
 }
 
 /// Test that blocks and attestations that refer to states around an unaligned split state are
