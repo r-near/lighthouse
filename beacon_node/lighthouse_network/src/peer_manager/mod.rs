@@ -31,7 +31,7 @@ pub use peerdb::peer_info::{
 };
 use peerdb::score::{PeerAction, ReportSource};
 pub use peerdb::sync_status::{SyncInfo, SyncStatus};
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap};
 use std::net::IpAddr;
 use strum::IntoEnumIterator;
 use types::data_column_custody_group::{
@@ -1451,7 +1451,7 @@ impl<E: EthSpec> PeerManager<E> {
         &self,
         peer_id: &PeerId,
         custody_group_count: u64,
-    ) -> Result<HashSet<CustodyIndex>, String> {
+    ) -> Result<Vec<CustodyIndex>, String> {
         // If we don't have a node id, we cannot compute the custody duties anyway
         let node_id = peer_id_to_node_id(peer_id)?;
         let spec = &self.network_globals.spec;

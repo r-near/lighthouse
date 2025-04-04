@@ -1,9 +1,8 @@
 use crate::{ChainSpec, ColumnIndex, DataColumnSubnetId};
 use alloy_primitives::U256;
 use itertools::Itertools;
-use maplit::hashset;
 use safe_arith::{ArithError, SafeArith};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub type CustodyIndex = u64;
 
@@ -24,14 +23,14 @@ pub fn get_custody_groups(
     raw_node_id: [u8; 32],
     custody_group_count: u64,
     spec: &ChainSpec,
-) -> Result<HashSet<CustodyIndex>, DataColumnCustodyGroupError> {
+) -> Result<Vec<CustodyIndex>, DataColumnCustodyGroupError> {
     if custody_group_count > spec.number_of_custody_groups {
         return Err(DataColumnCustodyGroupError::InvalidCustodyGroupCount(
             custody_group_count,
         ));
     }
 
-    let mut custody_groups: HashSet<u64> = hashset![];
+    let mut custody_groups: BTreeSet<u64> = <_>::default();
     let mut current_id = U256::from_be_slice(&raw_node_id);
     while custody_groups.len() < custody_group_count as usize {
         let mut node_id_bytes = [0u8; 32];
@@ -49,7 +48,7 @@ pub fn get_custody_groups(
         current_id = current_id.wrapping_add(U256::from(1u64));
     }
 
-    Ok(custody_groups)
+    Ok(custody_groups.into_iter().collect::<Vec<_>>())
 }
 
 /// Returns the columns that are associated with a given custody group.

@@ -10,6 +10,8 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use slot_clock::SlotClock;
 use smallvec::SmallVec;
+use ssz::{Decode, Encode};
+use ssz_derive::{Decode, Encode};
 use state_processing::common::get_attestation_participation_flag_indices;
 use state_processing::per_epoch_processing::{
     errors::EpochProcessingError, EpochProcessingSummary,
@@ -20,16 +22,17 @@ use std::marker::PhantomData;
 use std::str::Utf8Error;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use store::AbstractExecPayload;
+use store::{AbstractExecPayload, DBColumn, Error as StoreError, StoreItem};
 use tracing::{debug, error, info, instrument, warn};
 use types::consts::altair::{
     TIMELY_HEAD_FLAG_INDEX, TIMELY_SOURCE_FLAG_INDEX, TIMELY_TARGET_FLAG_INDEX,
 };
+use types::typenum::U524288;
 use types::{
     Attestation, AttestationData, AttesterSlashingRef, BeaconBlockRef, BeaconState,
     BeaconStateError, ChainSpec, Epoch, EthSpec, Hash256, IndexedAttestation,
     IndexedAttestationRef, ProposerSlashing, PublicKeyBytes, SignedAggregateAndProof,
-    SignedContributionAndProof, Slot, SyncCommitteeMessage, VoluntaryExit,
+    SignedContributionAndProof, Slot, SyncCommitteeMessage, VariableList, VoluntaryExit,
 };
 /// Used for Prometheus labels.
 ///
@@ -388,6 +391,9 @@ pub struct ValidatorMonitor<E: EthSpec> {
     validators: HashMap<PublicKeyBytes, MonitoredValidator>,
     /// A map of validator index (state.validators) to a validator public key.
     indices: HashMap<u64, PublicKeyBytes>,
+    /// Additional map to indices that bypasses `auto_register` config and tracks the time a
+    /// validator was last seen as a UNIX timestamp
+    last_seen_local_validators: HashMap<u64, Duration>,
     /// If true, allow the automatic registration of validators.
     auto_register: bool,
     /// Once the number of monitored validators goes above this threshold, we
@@ -413,6 +419,7 @@ impl<E: EthSpec> ValidatorMonitor<E> {
     pub fn new(
         config: ValidatorMonitorConfig,
         beacon_proposer_cache: Arc<Mutex<BeaconProposerCache>>,
+        persisted_local_indices: PersistedLocalIndices,
     ) -> Self {
         let ValidatorMonitorConfig {
             auto_register,
@@ -423,6 +430,12 @@ impl<E: EthSpec> ValidatorMonitor<E> {
         let mut s = Self {
             validators: <_>::default(),
             indices: <_>::default(),
+            last_seen_local_validators: HashMap::from_iter(
+                persisted_local_indices
+                    .indices
+                    .iter()
+                    .map(|e| (e.index, Duration::from_secs(e.last_seen_timestamp_sec))),
+            ),
             auto_register,
             individual_tracking_threshold,
             missed_blocks: <_>::default(),
@@ -447,6 +460,34 @@ impl<E: EthSpec> ValidatorMonitor<E> {
     )]
     fn individual_tracking(&self) -> bool {
         self.validators.len() <= self.individual_tracking_threshold
+    }
+
+    /// Prunes all validators not seen for longer than `ttl` (time to live)
+    pub fn prune_registered_local_validators(&mut self, ttl: Duration) {
+        let now = timestamp_now();
+        // Prune expired keys
+        self.last_seen_local_validators
+            .retain(|_, last_seen| now - *last_seen < ttl);
+    }
+
+    /// Returns an iterator over registered local validators indices
+    pub fn get_registered_local_validators(&self) -> impl Iterator<Item = &u64> {
+        self.last_seen_local_validators.keys()
+    }
+
+    /// Returns local indices to persist to the DB
+    pub fn to_persisted_local_validators(&self) -> Result<PersistedLocalIndices, ssz_types::Error> {
+        Ok(PersistedLocalIndices {
+            indices: VariableList::new(
+                self.last_seen_local_validators
+                    .iter()
+                    .map(|(index, last_seen)| PersistedLocalIndex {
+                        index: *index,
+                        last_seen_timestamp_sec: last_seen.as_secs(),
+                    })
+                    .collect::<Vec<_>>(),
+            )?,
+        })
     }
 
     /// Add some validators to `self` for additional monitoring.
@@ -1198,6 +1239,9 @@ impl<E: EthSpec> ValidatorMonitor<E> {
         skip_all
     )]
     pub fn auto_register_local_validator(&mut self, validator_index: u64) {
+        self.last_seen_local_validators
+            .insert(validator_index, timestamp_now());
+
         if !self.auto_register {
             return;
         }
@@ -2402,5 +2446,31 @@ fn min_opt<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
         (Some(x), None) => Some(x),
         (None, Some(y)) => Some(y),
         _ => None,
+    }
+}
+
+// Using 524288 as a really high limit that's never meant to be reached
+#[derive(Encode, Decode, Default)]
+pub struct PersistedLocalIndices {
+    indices: VariableList<PersistedLocalIndex, U524288>,
+}
+
+#[derive(Encode, Decode)]
+pub struct PersistedLocalIndex {
+    index: u64,
+    last_seen_timestamp_sec: u64,
+}
+
+impl StoreItem for PersistedLocalIndices {
+    fn db_column() -> DBColumn {
+        DBColumn::LocalIndices
+    }
+
+    fn as_store_bytes(&self) -> Vec<u8> {
+        self.as_ssz_bytes()
+    }
+
+    fn from_store_bytes(bytes: &[u8]) -> Result<Self, StoreError> {
+        Self::from_ssz_bytes(bytes).map_err(Into::into)
     }
 }

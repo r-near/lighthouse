@@ -14,7 +14,7 @@ use lighthouse_network::{
         behaviour::{ConnectionEstablished, FromSwarm},
         ConnectionId, NetworkBehaviour,
     },
-    types::{CGCUpdates, SyncState},
+    types::SyncState,
     ConnectedPoint, Enr, NetworkConfig, NetworkGlobals, PeerId, PeerManager,
 };
 use network::{NetworkReceivers, NetworkSenders};
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use store::MemoryStore;
 use task_executor::test_utils::TestRuntime;
-use types::{ChainSpec, EthSpec};
+use types::{CGCUpdates, ChainSpec, EthSpec};
 
 pub const TCP_PORT: u16 = 42;
 pub const UDP_PORT: u16 = 42;

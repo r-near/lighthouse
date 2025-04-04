@@ -203,6 +203,8 @@ pub struct ChainSpec {
     pub data_column_sidecar_subnet_count: u64,
     pub samples_per_slot: u64,
     pub custody_requirement: u64,
+    pub validator_custody_requirement: u64,
+    pub balance_per_additional_custody_group: u64,
 
     /*
      * Networking
@@ -263,6 +265,12 @@ pub struct ChainSpec {
 }
 
 impl ChainSpec {
+    /// Panics if `self` contains some illegal value
+    pub fn assert_valid(&self) {
+        // Tests that balance_per_additional_custody_group is not zero
+        self.custody_group_by_balance(1);
+    }
+
     /// Construct a `ChainSpec` from a standard config.
     pub fn from_config<E: EthSpec>(config: &Config) -> Option<Self> {
         let spec = E::default_spec();
@@ -704,11 +712,28 @@ impl ChainSpec {
         Ok(std::cmp::max(custody_column_count, self.samples_per_slot))
     }
 
+    // TODO(das): delete in favor of custody_group_by_balance
     pub fn custody_group_count(&self, is_supernode: bool) -> u64 {
         if is_supernode {
             self.number_of_custody_groups
         } else {
             self.custody_requirement
+        }
+    }
+
+    pub fn custody_group_by_balance(&self, balance_gwei: u64) -> u64 {
+        if balance_gwei == 0 {
+            self.custody_requirement
+        } else {
+            std::cmp::min(
+                std::cmp::max(
+                    balance_gwei
+                        .safe_div(self.balance_per_additional_custody_group)
+                        .expect("balance_per_additional_custody_group must be greater than 0"),
+                    self.validator_custody_requirement,
+                ),
+                self.number_of_custody_groups,
+            )
         }
     }
 
@@ -915,6 +940,8 @@ impl ChainSpec {
             fulu_fork_version: [0x06, 0x00, 0x00, 0x00],
             fulu_fork_epoch: None,
             custody_requirement: 4,
+            validator_custody_requirement: 8,
+            balance_per_additional_custody_group: 32000000000,
             number_of_custody_groups: 128,
             data_column_sidecar_subnet_count: 128,
             number_of_columns: 128,
@@ -1245,6 +1272,8 @@ impl ChainSpec {
             fulu_fork_version: [0x06, 0x00, 0x00, 0x64],
             fulu_fork_epoch: None,
             custody_requirement: 4,
+            validator_custody_requirement: 8,
+            balance_per_additional_custody_group: 32000000000,
             number_of_custody_groups: 128,
             data_column_sidecar_subnet_count: 128,
             number_of_columns: 128,

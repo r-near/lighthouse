@@ -305,6 +305,8 @@ pub enum DBColumn {
     ForkChoice,
     #[strum(serialize = "pkc")]
     PubkeyCache,
+    #[strum(serialize = "lix")]
+    LocalIndices,
     /// For the legacy table mapping restore point numbers to state roots.
     ///
     /// DEPRECATED. Can be removed once schema v22 is buried by a hard fork.
@@ -396,6 +398,7 @@ impl DBColumn {
             | Self::Eth1Cache
             | Self::ForkChoice
             | Self::PubkeyCache
+            | Self::LocalIndices
             | Self::BeaconRestorePoint
             | Self::DhtEnrs
             | Self::OptimisticTransitionBlock => 32,

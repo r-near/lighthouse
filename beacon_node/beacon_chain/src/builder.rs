@@ -1,5 +1,6 @@
 use crate::beacon_chain::{
-    CanonicalHead, LightClientProducerEvent, BEACON_CHAIN_DB_KEY, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
+    CanonicalHead, LightClientProducerEvent, BEACON_CHAIN_DB_KEY, ETH1_CACHE_DB_KEY,
+    LOCAL_INDICES_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::data_availability_checker::DataAvailabilityChecker;
@@ -15,7 +16,7 @@ use crate::migrate::{BackgroundMigrator, MigratorConfig};
 use crate::observed_data_sidecars::ObservedDataSidecars;
 use crate::persisted_beacon_chain::PersistedBeaconChain;
 use crate::shuffling_cache::{BlockShufflingIds, ShufflingCache};
-use crate::validator_monitor::{ValidatorMonitor, ValidatorMonitorConfig};
+use crate::validator_monitor::{PersistedLocalIndices, ValidatorMonitor, ValidatorMonitorConfig};
 use crate::validator_pubkey_cache::ValidatorPubkeyCache;
 use crate::ChainConfig;
 use crate::{
@@ -732,8 +733,16 @@ where
         let head_tracker = Arc::new(self.head_tracker.unwrap_or_default());
         let beacon_proposer_cache: Arc<Mutex<BeaconProposerCache>> = <_>::default();
 
-        let mut validator_monitor =
-            ValidatorMonitor::new(validator_monitor_config, beacon_proposer_cache.clone());
+        let persisted_local_indices = store
+            .get_item::<PersistedLocalIndices>(&LOCAL_INDICES_DB_KEY)
+            .map_err(|e| format!("DB error whilst reading persisted local indices: {e:?}"))?
+            .unwrap_or_default();
+
+        let mut validator_monitor = ValidatorMonitor::new(
+            validator_monitor_config,
+            beacon_proposer_cache.clone(),
+            persisted_local_indices,
+        );
 
         let current_slot = if slot_clock
             .is_prior_to_genesis()

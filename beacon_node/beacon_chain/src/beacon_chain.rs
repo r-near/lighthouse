@@ -141,6 +141,7 @@ pub const BEACON_CHAIN_DB_KEY: Hash256 = Hash256::ZERO;
 pub const OP_POOL_DB_KEY: Hash256 = Hash256::ZERO;
 pub const ETH1_CACHE_DB_KEY: Hash256 = Hash256::ZERO;
 pub const FORK_CHOICE_DB_KEY: Hash256 = Hash256::ZERO;
+pub const LOCAL_INDICES_DB_KEY: Hash256 = Hash256::ZERO;
 
 /// Defines how old a block can be before it's no longer a candidate for the early attester cache.
 const EARLY_ATTESTER_CACHE_HISTORIC_SLOTS: u64 = 4;
@@ -708,6 +709,17 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             self.store
                 .put_item(&ETH1_CACHE_DB_KEY, &eth1_chain.as_ssz_container())?;
         }
+
+        Ok(())
+    }
+
+    pub fn persist_local_indices(&self) -> Result<(), Error> {
+        let persisted_local_validators = self
+            .validator_monitor
+            .read()
+            .to_persisted_local_validators()?;
+        self.store
+            .put_item(&LOCAL_INDICES_DB_KEY, &persisted_local_validators)?;
 
         Ok(())
     }
@@ -7151,6 +7163,14 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         )
     }
 
+    /// Register a local validator that has connected to the Beacon REST API
+    pub fn register_local_validator(&self, validator_index: u64) {
+        // TODO(das): persist `last_seen_local_validators` to disk on shutdown and once in a while
+        self.validator_monitor
+            .write()
+            .auto_register_local_validator(validator_index);
+    }
+
     pub fn metrics(&self) -> BeaconChainMetrics {
         BeaconChainMetrics {
             reqresp_pre_import_cache_len: self.reqresp_pre_import_cache.read().len(),
@@ -7210,7 +7230,8 @@ impl<T: BeaconChainTypes> Drop for BeaconChain<T> {
         let drop = || -> Result<(), Error> {
             self.persist_head_and_fork_choice()?;
             self.persist_op_pool()?;
-            self.persist_eth1_cache()
+            self.persist_eth1_cache()?;
+            self.persist_local_indices()
         };
 
         if let Err(e) = drop() {

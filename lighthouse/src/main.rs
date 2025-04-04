@@ -641,6 +641,9 @@ fn run<E: EthSpec>(
         .eth2_network_config(eth2_network_config)?
         .build()?;
 
+    // Panic early if the spec contains illegal values
+    environment.eth2_config.spec.assert_valid();
+
     // Log panics properly.
     {
         std::panic::set_hook(Box::new(move |info| {

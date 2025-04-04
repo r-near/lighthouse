@@ -117,7 +117,7 @@ pub async fn build_libp2p_instance(
         libp2p_registry: None,
     };
     Libp2pInstance(
-        LibP2PService::new(executor, libp2p_context)
+        LibP2PService::new(executor, libp2p_context, None)
             .await
             .expect("should build libp2p instance")
             .0,

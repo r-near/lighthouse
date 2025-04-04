@@ -1194,9 +1194,8 @@ impl<E: EthSpec> Discovery<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CGCUpdates;
     use libp2p::identity::secp256k1;
-    use types::{BitVector, MinimalEthSpec, SubnetId};
+    use types::{BitVector, CGCUpdates, MinimalEthSpec, SubnetId};
 
     type E = MinimalEthSpec;
 

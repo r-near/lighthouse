@@ -7,10 +7,11 @@ use crate::impls::beacon_state::{get_full_state, store_full_state};
 use crate::iter::{BlockRootsIterator, ParentRootBlockIterator, RootsIterator};
 use crate::memory_store::MemoryStore;
 use crate::metadata::{
-    AnchorInfo, BlobInfo, CompactionTimestamp, DataColumnInfo, PruningCheckpoint, SchemaVersion,
-    ANCHOR_FOR_ARCHIVE_NODE, ANCHOR_INFO_KEY, ANCHOR_UNINITIALIZED, BLOB_INFO_KEY,
-    COMPACTION_TIMESTAMP_KEY, CONFIG_KEY, CURRENT_SCHEMA_VERSION, DATA_COLUMN_INFO_KEY,
-    PRUNING_CHECKPOINT_KEY, SCHEMA_VERSION_KEY, SPLIT_KEY, STATE_UPPER_LIMIT_NO_RETAIN,
+    AnchorInfo, BlobInfo, CGCUpdatesStore, CompactionTimestamp, CustodyInfo, DataColumnInfo,
+    PruningCheckpoint, SchemaVersion, ANCHOR_FOR_ARCHIVE_NODE, ANCHOR_INFO_KEY,
+    ANCHOR_UNINITIALIZED, BLOB_INFO_KEY, CGC_UPDATES_KEY, COMPACTION_TIMESTAMP_KEY, CONFIG_KEY,
+    CURRENT_SCHEMA_VERSION, CUSTODY_INFO_KEY, DATA_COLUMN_INFO_KEY, PRUNING_CHECKPOINT_KEY,
+    SCHEMA_VERSION_KEY, SPLIT_KEY, STATE_UPPER_LIMIT_NO_RETAIN,
 };
 use crate::state_cache::{PutStateOutcome, StateCache};
 use crate::{
@@ -374,6 +375,14 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
         if let Some(disk_config) = db.load_config()? {
             let split = db.get_split_info();
             let anchor = db.get_anchor_info();
+            // TODO(das): We need to check that the persited columns already in the DB are
+            // compatible with a new PeerID if applicable. We don't want to compare the full PeerId
+            // of the existing DB and the runtime PeerId. Instead we want to assert that the
+            // **sorted** set of columns of the persisted post-peerdas blocks with data is the same
+            // as the runtime sorted set. With validator custody blocks may have more or less
+            // columns. We need to compare the largest set of the non-pruned columns. In a single
+            // runtime the PeerID does not change so all stored blocks are consistent with each
+            // other.
             db.config
                 .check_compatibility(&disk_config, &split, &anchor)?;
 
@@ -2449,6 +2458,30 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         data_column_info: &DataColumnInfo,
     ) -> KeyValueStoreOp {
         data_column_info.as_kv_store_op(DATA_COLUMN_INFO_KEY)
+    }
+
+    /// Load custody info from disk.
+    pub fn get_custody_info(&self) -> Result<Option<CustodyInfo>, Error> {
+        self.hot_db.get(&CUSTODY_INFO_KEY)
+    }
+
+    /// Store the given `custody_info` to disk.
+    pub fn put_custody_info_in_batch(&self, custody_info: &CustodyInfo) -> Result<(), Error> {
+        let kv_store_op = custody_info.as_kv_store_op(CUSTODY_INFO_KEY);
+        self.hot_db.do_atomically(vec![kv_store_op])
+    }
+
+    /// Load `cgc_updates` from disk.
+    pub fn get_cgc_updates(&self) -> Result<Option<CGCUpdates>, Error> {
+        self.hot_db
+            .get::<CGCUpdatesStore>(&CGC_UPDATES_KEY)
+            .map(|r| r.map(|r| r.value))
+    }
+
+    /// Store the given `cgc_updates` to disk.
+    pub fn put_cgc_updates(&self, cgc_updates: CGCUpdates) -> Result<(), Error> {
+        let kv_store_op = CGCUpdatesStore { value: cgc_updates }.as_kv_store_op(CGC_UPDATES_KEY);
+        self.hot_db.do_atomically(vec![kv_store_op])
     }
 
     /// Return the slot-window describing the available historic states.

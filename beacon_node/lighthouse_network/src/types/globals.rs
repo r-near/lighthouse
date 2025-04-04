@@ -11,7 +11,7 @@ use std::sync::Arc;
 use types::data_column_custody_group::{
     compute_columns_for_custody_group, compute_subnets_from_custody_group, get_custody_groups,
 };
-use types::{ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slot};
+use types::{CGCUpdates, ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slot};
 
 pub struct NetworkGlobals<E: EthSpec> {
     /// The current local ENR.
@@ -37,12 +37,6 @@ pub struct NetworkGlobals<E: EthSpec> {
     pub config: Arc<NetworkConfig>,
     /// Ethereum chain configuration. Immutable after initialization.
     pub spec: Arc<ChainSpec>,
-}
-
-pub struct CGCUpdates {
-    initial_value: u64,
-    updates: Vec<(Slot, u64)>,
-    // TODO(das): Track backfilled CGC
 }
 
 impl<E: EthSpec> NetworkGlobals<E> {
@@ -145,15 +139,19 @@ impl<E: EthSpec> NetworkGlobals<E> {
     }
 
     pub fn sampling_subnets(&self, slot: Slot) -> &[DataColumnSubnetId] {
-        let cgc = self.custody_group_count(slot) as usize;
-        // Returns as many elements as possible, can't panic as it's upper bounded by len
-        &self.all_sampling_subnets[..self.all_sampling_subnets.len().min(cgc)]
+        let cgc = self.custody_group_count(slot);
+        self.sampling_subnets_for_cgc(cgc)
     }
 
     pub fn sampling_columns(&self, slot: Slot) -> &[ColumnIndex] {
         let cgc = self.custody_group_count(slot) as usize;
         // Returns as many elements as possible, can't panic as it's upper bounded by len
         &self.all_sampling_columns[..self.all_sampling_columns.len().min(cgc)]
+    }
+
+    pub fn sampling_subnets_for_cgc(&self, cgc: u64) -> &[DataColumnSubnetId] {
+        // Returns as many elements as possible, can't panic as it's upper bounded by len
+        &self.all_sampling_subnets[..self.all_sampling_subnets.len().min(cgc as usize)]
     }
 
     fn public_custody_group_count(&self) -> u64 {
@@ -163,7 +161,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
     }
 
     /// Returns the custody group count (CGC)
-    fn custody_group_count(&self, slot: Slot) -> u64 {
+    pub fn custody_group_count(&self, slot: Slot) -> u64 {
         self.cgc_updates.read().at_slot(slot)
     }
 
@@ -176,8 +174,14 @@ impl<E: EthSpec> NetworkGlobals<E> {
     }
 
     /// Adds a new CGC value update
-    pub fn add_cgc_update(&self, update: (Slot, u64)) {
-        self.cgc_updates.write().add_latest_update(update);
+    pub fn add_cgc_update(&self, update_start_slot: Slot, cgc: u64) -> Result<(), String> {
+        self.cgc_updates
+            .write()
+            .add_latest_update((update_start_slot, cgc))
+    }
+
+    pub fn dump_cgc_updates(&self) -> CGCUpdates {
+        self.cgc_updates.read().clone()
     }
 
     /// Returns the number of libp2p connected peers.
@@ -273,30 +277,6 @@ impl<E: EthSpec> NetworkGlobals<E> {
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
         let cgc_updates = CGCUpdates::new(initial_cgc);
         NetworkGlobals::new(enr, cgc_updates, trusted_peers, false, config, spec)
-    }
-}
-
-impl CGCUpdates {
-    pub fn new(initial_value: u64) -> Self {
-        Self {
-            initial_value,
-            updates: vec![],
-        }
-    }
-
-    fn at_slot(&self, slot: Slot) -> u64 {
-        // TODO: Test and fix logic
-        for (update_slot, cgc) in &self.updates {
-            if slot > *update_slot {
-                return *cgc;
-            }
-        }
-
-        self.initial_value
-    }
-
-    fn add_latest_update(&mut self, update: (Slot, u64)) {
-        self.updates.push(update);
     }
 }
 

@@ -30,6 +30,7 @@ pub mod checkpoint;
 pub mod consolidation_request;
 pub mod consts;
 pub mod contribution_and_proof;
+pub mod custody;
 pub mod deposit;
 pub mod deposit_data;
 pub mod deposit_message;
@@ -148,6 +149,7 @@ pub use crate::config_and_preset::{
 };
 pub use crate::consolidation_request::ConsolidationRequest;
 pub use crate::contribution_and_proof::ContributionAndProof;
+pub use crate::custody::CGCUpdates;
 pub use crate::data_column_sidecar::{
     ColumnIndex, DataColumnIdentifier, DataColumnSidecar, DataColumnSidecarList,
 };

@@ -2,7 +2,7 @@ use crate::{DBColumn, Error, StoreItem};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
-use types::{Checkpoint, Hash256, Slot};
+use types::{typenum::U4096, CGCUpdates, Checkpoint, Hash256, Slot, VariableList};
 
 pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion(22);
 
@@ -17,6 +17,8 @@ pub const COMPACTION_TIMESTAMP_KEY: Hash256 = Hash256::repeat_byte(4);
 pub const ANCHOR_INFO_KEY: Hash256 = Hash256::repeat_byte(5);
 pub const BLOB_INFO_KEY: Hash256 = Hash256::repeat_byte(6);
 pub const DATA_COLUMN_INFO_KEY: Hash256 = Hash256::repeat_byte(7);
+pub const CUSTODY_INFO_KEY: Hash256 = Hash256::repeat_byte(8);
+pub const CGC_UPDATES_KEY: Hash256 = Hash256::repeat_byte(9);
 
 /// State upper limit value used to indicate that a node is not storing historic states.
 pub const STATE_UPPER_LIMIT_NO_RETAIN: Slot = Slot::new(u64::MAX);
@@ -234,6 +236,49 @@ pub struct DataColumnInfo {
 }
 
 impl StoreItem for DataColumnInfo {
+    fn db_column() -> DBColumn {
+        DBColumn::BeaconMeta
+    }
+
+    fn as_store_bytes(&self) -> Vec<u8> {
+        self.as_ssz_bytes()
+    }
+
+    fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(Self::from_ssz_bytes(bytes)?)
+    }
+}
+
+/// Database parameters relevant to data column sync.
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, Serialize, Deserialize)]
+pub struct CustodyInfo {
+    /// Given a PeerID, compute the set of custody columns with the maximum CGC value, then sort
+    /// them numerically.
+    /// 4096 is a random max limit that will never be reached
+    pub ordered_custody_columns: VariableList<u64, U4096>,
+}
+
+impl StoreItem for CustodyInfo {
+    fn db_column() -> DBColumn {
+        DBColumn::BeaconMeta
+    }
+
+    fn as_store_bytes(&self) -> Vec<u8> {
+        self.as_ssz_bytes()
+    }
+
+    fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(Self::from_ssz_bytes(bytes)?)
+    }
+}
+
+/// Database parameters relevant to data column sync.
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, Serialize, Deserialize)]
+pub struct CGCUpdatesStore {
+    pub value: CGCUpdates,
+}
+
+impl StoreItem for CGCUpdatesStore {
     fn db_column() -> DBColumn {
         DBColumn::BeaconMeta
     }

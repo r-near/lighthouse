@@ -15,7 +15,7 @@ use crate::rpc::{
 };
 use crate::types::{
     all_topics_at_fork, core_topics_to_subscribe, is_fork_non_core_topic, subnet_from_topic_hash,
-    CGCUpdates, GossipEncoding, GossipKind, GossipTopic, SnappyTransform, Subnet, SubnetDiscovery,
+    GossipEncoding, GossipKind, GossipTopic, SnappyTransform, Subnet, SubnetDiscovery,
 };
 use crate::EnrExt;
 use crate::Eth2Enr;
@@ -42,7 +42,7 @@ use types::{
     consts::altair::SYNC_COMMITTEE_SUBNET_COUNT, EnrForkId, Epoch, EthSpec, ForkContext, Slot,
     SubnetId,
 };
-use types::{ChainSpec, ForkName};
+use types::{CGCUpdates, ChainSpec, ForkName};
 use utils::{build_transport, strip_peer_id, Context as ServiceContext};
 
 pub mod api_types;
@@ -173,6 +173,7 @@ impl<E: EthSpec> Network<E> {
     pub async fn new(
         executor: task_executor::TaskExecutor,
         mut ctx: ServiceContext<'_>,
+        cgc_updates: Option<CGCUpdates>,
     ) -> Result<(Self, Arc<NetworkGlobals<E>>), String> {
         let config = ctx.config.clone();
         trace!("Libp2p Service starting");
@@ -197,10 +198,12 @@ impl<E: EthSpec> Network<E> {
         )?;
 
         // TODO: Load from disk, and check consistency with DB somewhere
-        let initial_cgc = ctx
-            .chain_spec
-            .custody_group_count(config.subscribe_all_data_column_subnets);
-        let cgc_updates = CGCUpdates::new(initial_cgc);
+        let cgc_updates = cgc_updates.unwrap_or_else(|| {
+            CGCUpdates::new(
+                ctx.chain_spec
+                    .custody_group_count(config.subscribe_all_data_column_subnets),
+            )
+        });
 
         // Construct the metadata
         let globals = NetworkGlobals::new(
