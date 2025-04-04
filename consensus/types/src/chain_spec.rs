@@ -712,15 +712,6 @@ impl ChainSpec {
         Ok(std::cmp::max(custody_column_count, self.samples_per_slot))
     }
 
-    // TODO(das): delete in favor of custody_group_by_balance
-    pub fn custody_group_count(&self, is_supernode: bool) -> u64 {
-        if is_supernode {
-            self.number_of_custody_groups
-        } else {
-            self.custody_requirement
-        }
-    }
-
     pub fn custody_group_by_balance(&self, balance_gwei: u64) -> u64 {
         if balance_gwei == 0 {
             self.custody_requirement

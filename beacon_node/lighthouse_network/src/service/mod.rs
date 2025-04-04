@@ -199,10 +199,14 @@ impl<E: EthSpec> Network<E> {
 
         // Load initial CGC updates from persisted source (DB) or default to minimum CGC
         let cgc_updates = initial_cgc_updates.unwrap_or_else(|| {
-            CGCUpdates::new(
-                ctx.chain_spec
-                    .custody_group_count(config.subscribe_all_data_column_subnets),
-            )
+            let initial_cgc = if config.subscribe_all_data_column_subnets {
+                ctx.chain_spec.number_of_custody_groups
+            } else {
+                ctx.chain_spec.custody_requirement
+            };
+            // TODO(das): Consider setting the initial step not to slot 0, but to the first block in
+            // the node's DB. Such that we can adjust it when backfilling.
+            CGCUpdates::new(initial_cgc)
         });
 
         // Construct the metadata

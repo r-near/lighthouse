@@ -887,8 +887,6 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             .spec
             .custody_group_by_balance(known_validators_balance);
 
-        // TODO(das): check the backfilled CGC and potentially update the network globals state
-
         if next_cgc != prev_cgc {
             // TODO(das): Should we consider the case where the clock is almost at the end of the epoch?
             // If I/O is slow we may update the in-memory map for an epoch that's already
@@ -937,6 +935,14 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 }
             }
         }
+
+        // TODO(das): check the backfilled CGC and potentially update the network globals state
+        // IDEA:
+        // When we forward sync and finalize a new block, we may restart backfill again from a later
+        // block (the new finalized block). We will reset oldest_block to that block and fail
+        // backfill sync to start over from it. Then make backfill sync use a higher CGC (say 128)
+        // and when oldest_block is less than the oldest step with a value < 128 we can delete that
+        // step such that `custody_group_count(clock - da_window)` returns 128.
 
         // Schedule an advertise CGC update for later
         // TODO(das): use min_epochs_for_data_columns

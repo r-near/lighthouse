@@ -399,6 +399,8 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         // Compute custody column peers before sending the blocks_by_range request. If we don't have
         // enough peers, error here.
         let data_column_requests = if matches!(batch_type, ByRangeRequestType::BlocksAndColumns) {
+            // TODO(das): for backfill sync we want to return a different value if we are trying to
+            // close the gap
             let column_indexes = self.network_globals().sampling_columns(request_start_slot);
             Some(self.make_columns_by_range_requests(request.clone(), column_indexes)?)
         } else {
