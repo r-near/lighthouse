@@ -40,7 +40,7 @@ pub trait Eth2Enr {
     ) -> Result<EnrSyncCommitteeBitfield<E>, &'static str>;
 
     /// The peerdas custody group count associated with the ENR.
-    fn custody_group_count<E: EthSpec>(&self, spec: &ChainSpec) -> Result<u64, &'static str>;
+    fn custody_group_count(&self, spec: &ChainSpec) -> Result<u64, &'static str>;
 
     fn eth2(&self) -> Result<EnrForkId, &'static str>;
 }
@@ -68,17 +68,19 @@ impl Eth2Enr for Enr {
             .map_err(|_| "Could not decode the ENR syncnets bitfield")
     }
 
-    fn custody_group_count<E: EthSpec>(&self, spec: &ChainSpec) -> Result<u64, &'static str> {
+    fn custody_group_count(&self, spec: &ChainSpec) -> Result<u64, &'static str> {
         let cgc = self
             .get_decodable::<u64>(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY)
             .ok_or("ENR custody group count non-existent")?
             .map_err(|_| "Could not decode the ENR custody group count")?;
 
-        if (spec.custody_requirement..=spec.number_of_custody_groups).contains(&cgc) {
-            Ok(cgc)
-        } else {
-            Err("Invalid custody group count in ENR")
+        if cgc < spec.custody_requirement {
+            return Err("ENR CGC < custody_requirement");
         }
+        if cgc > spec.number_of_custody_groups {
+            return Err("ENR CGC > number_of_custody_groups");
+        }
+        Ok(cgc)
     }
 
     fn eth2(&self) -> Result<EnrForkId, &'static str> {
@@ -363,7 +365,7 @@ mod test {
         let enr = build_enr_with_config(config, &spec).0;
 
         assert_eq!(
-            enr.custody_group_count::<E>(&spec).unwrap(),
+            enr.custody_group_count(&spec).unwrap(),
             spec.custody_requirement,
         );
     }
@@ -378,7 +380,7 @@ mod test {
         let enr = build_enr_with_config(config, &spec).0;
 
         assert_eq!(
-            enr.custody_group_count::<E>(&spec).unwrap(),
+            enr.custody_group_count(&spec).unwrap(),
             spec.number_of_custody_groups,
         );
     }

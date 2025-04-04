@@ -594,6 +594,26 @@ impl<E: EthSpec> Discovery<E> {
         enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
     }
 
+    /// Updates the `cgc` field of our local ENR.
+    pub fn update_cgc_enr(&mut self, cgc: u64) -> Result<bool, String> {
+        if let Ok(current_cgc) = self.local_enr().custody_group_count(&self.spec) {
+            if current_cgc == cgc {
+                return Ok(false);
+            }
+        }
+
+        self.discv5
+            .enr_insert(ETH2_ENR_KEY, &cgc)
+            .map_err(|e| format!("{:?}", e))?;
+
+        // replace the global version with discovery version
+        self.network_globals.set_enr(self.discv5.local_enr());
+
+        // persist modified enr to disk
+        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
+        Ok(true)
+    }
+
     // Bans a peer and it's associated seen IP addresses.
     pub fn ban_peer(&mut self, peer_id: &PeerId, ip_addresses: Vec<IpAddr>) {
         // first try and convert the peer_id to a node_id.

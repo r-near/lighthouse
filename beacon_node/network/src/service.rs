@@ -32,10 +32,9 @@ use task_executor::ShutdownReason;
 use tokio::sync::mpsc;
 use tokio::time::Sleep;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
-use types::CGCUpdates;
 use types::{
-    ChainSpec, EthSpec, ForkContext, Slot, SubnetId, SyncCommitteeSubscription, SyncSubnetId,
-    Unsigned, ValidatorSubscription,
+    ChainSpec, Epoch, EthSpec, ForkContext, Slot, SubnetId, SyncCommitteeSubscription,
+    SyncSubnetId, Unsigned, ValidatorSubscription,
 };
 
 mod tests;
@@ -277,22 +276,15 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             // TODO(das): check that list of columns is compatible
         }
 
-        let cgc_udpates = if let Some(disk_cgc_updates) = store
+        // If there are no stored disk_cgc_updates `Network::new` will default to empty ones with
+        // the minimum CGC.
+        let initial_cgc_updates = store
             .get_cgc_updates()
-            .map_err(|e| format!("Unable to read cgc updates from the DB: {e:?}"))?
-        {
-            disk_cgc_updates
-        } else {
-            // Just return the new one
-            let initial_cgc = beacon_chain
-                .spec
-                .custody_group_count(config.subscribe_all_data_column_subnets);
-            CGCUpdates::new(initial_cgc)
-        };
+            .map_err(|e| format!("Unable to read cgc updates from the DB: {e:?}"))?;
 
         // launch libp2p service
         let (mut libp2p, network_globals) =
-            Network::new(executor.clone(), service_context, Some(cgc_udpates)).await?;
+            Network::new(executor.clone(), service_context, initial_cgc_updates).await?;
 
         // Repopulate the DHT with stored ENR's if discovery is not disabled.
         if !config.disable_discovery {
@@ -819,6 +811,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
                 LOCAL_VALIDATOR_REGISTRY_TTL_SEC,
             ));
 
+        let mut local_indices_count = 0;
         let known_validators_balance = self
             .beacon_chain
             .validator_monitor
@@ -826,6 +819,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             .get_registered_local_validators()
             // TODO(das): should ignore non active validators?
             .map(|validator_index| {
+                local_indices_count += 1;
                 cached_head
                     .snapshot
                     .beacon_state
@@ -834,7 +828,9 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             })
             .sum::<u64>();
 
-        // TODO(das): track connected balance as a metric
+        // TODO(das): Should persist the local indices here to dump to DB once in a while in case of
+        // improper shutdown? Not sure if we do the same for other persisted data. It sounds
+        // sensible but at the same time it will waste I/O.
 
         let next_cgc = self
             .beacon_chain
@@ -849,7 +845,7 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             // progressing.
             let next_epoch = clock_epoch + 1;
             info!(prev_cgc, next_cgc, %next_epoch, "Updating internal custody count");
-            // TODO(das): Add CGC metrics for updates, current internal value and announced value
+            metrics::inc_counter(&metrics::CGC_UPDATES);
 
             // Add a new entry to the network globals
             if let Err(e) = self.network_globals.add_cgc_update(
@@ -899,7 +895,26 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         let cgc_to_announce = self
             .network_globals
             .custody_group_count(last_pruned_epoch.start_slot(T::EthSpec::slots_per_epoch()));
-        // TODO(das): Compare with current announced and update ENR
+
+        // update_enr_cgc updates the NetworkGlobals ENR
+        match self.libp2p.update_enr_cgc(cgc_to_announce) {
+            Ok(updated) => {
+                if updated {
+                    info!(cgc = cgc_to_announce, "Updated ENR custody group count");
+                }
+            }
+            Err(e) => {
+                crit!(error = ?e, "Error updating local ENR custody group count");
+            }
+        }
+
+        metrics::set_gauge(&metrics::CGC_INTERNAL, next_cgc as i64);
+        metrics::set_gauge(&metrics::CGC_ANNOUNCED, cgc_to_announce as i64);
+        metrics::set_gauge(&metrics::LOCAL_INDICES_COUNT, local_indices_count as i64);
+        metrics::set_gauge(
+            &metrics::LOCAL_INDICES_ETH_BALANCE,
+            known_validators_balance as i64 / 1_000_000_000,
+        );
     }
 
     fn on_subnet_service_msg(&mut self, msg: SubnetServiceMessage) {

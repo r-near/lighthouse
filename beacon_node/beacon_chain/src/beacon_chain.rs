@@ -7165,7 +7165,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Register a local validator that has connected to the Beacon REST API
     pub fn register_local_validator(&self, validator_index: u64) {
-        // TODO(das): persist `last_seen_local_validators` to disk on shutdown and once in a while
         self.validator_monitor
             .write()
             .auto_register_local_validator(validator_index);

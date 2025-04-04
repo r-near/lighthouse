@@ -628,6 +628,40 @@ pub static SAMPLING_REQUEST_RESULT: LazyLock<Result<IntCounterVec>> = LazyLock::
     )
 });
 
+/*
+ * PeerDAS custody metrics
+ */
+pub static LOCAL_INDICES_COUNT: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_local_indices_count",
+        "Current count of local indices that recently connected to the beacon API",
+    )
+});
+pub static LOCAL_INDICES_ETH_BALANCE: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_local_indices_eth_balance",
+        "Current sum of local indices balance that recently connected to the beacon API",
+    )
+});
+pub static CGC_INTERNAL: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_cgc_internal",
+        "Current internal Custody Group Count CGC",
+    )
+});
+pub static CGC_ANNOUNCED: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_cgc_announced",
+        "Current announced Custody Group Count CGC",
+    )
+});
+pub static CGC_UPDATES: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
+    try_create_int_counter(
+        "beacon_custody_cgc_updates",
+        "Total count of Custody Group Count CGC updates",
+    )
+});
+
 pub fn register_finality_update_error(error: &LightClientFinalityUpdateError) {
     inc_counter_vec(&GOSSIP_FINALITY_UPDATE_ERRORS_PER_TYPE, &[error.as_ref()]);
 }

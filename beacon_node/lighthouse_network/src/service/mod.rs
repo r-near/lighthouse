@@ -173,7 +173,7 @@ impl<E: EthSpec> Network<E> {
     pub async fn new(
         executor: task_executor::TaskExecutor,
         mut ctx: ServiceContext<'_>,
-        cgc_updates: Option<CGCUpdates>,
+        initial_cgc_updates: Option<CGCUpdates>,
     ) -> Result<(Self, Arc<NetworkGlobals<E>>), String> {
         let config = ctx.config.clone();
         trace!("Libp2p Service starting");
@@ -197,8 +197,8 @@ impl<E: EthSpec> Network<E> {
             &ctx.chain_spec,
         )?;
 
-        // TODO: Load from disk, and check consistency with DB somewhere
-        let cgc_updates = cgc_updates.unwrap_or_else(|| {
+        // Load initial CGC updates from persisted source (DB) or default to minimum CGC
+        let cgc_updates = initial_cgc_updates.unwrap_or_else(|| {
             CGCUpdates::new(
                 ctx.chain_spec
                     .custody_group_count(config.subscribe_all_data_column_subnets),
@@ -1259,10 +1259,21 @@ impl<E: EthSpec> Network<E> {
             crit!(error = e, "Could not update ENR bitfield");
         }
 
-        // TODO: Can we deprecate this for a single source of truth?
+        // TODO(das): Can we deprecate this for a single source of truth?
         let metadata = self.network_globals.local_metadata();
         self.eth2_rpc_mut()
             .update_seq_number(*metadata.seq_number());
+    }
+
+    /// Updates the CGC value in our local ENR
+    #[instrument(parent = None,
+        level = "trace",
+        fields(service = "libp2p"),
+        name = "libp2p",
+        skip_all
+    )]
+    pub fn update_enr_cgc(&mut self, cgc: u64) -> Result<bool, String> {
+        self.discovery_mut().update_cgc_enr(cgc)
     }
 
     /// Attempts to discover new peers for a given subnet. The `min_ttl` gives the time at which we

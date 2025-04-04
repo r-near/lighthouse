@@ -195,28 +195,13 @@ impl TestRig {
 
         let (sync_tx, _sync_rx) = mpsc::unbounded_channel();
 
-        // Default metadata
-        let meta_data = if spec.is_peer_das_scheduled() {
-            MetaData::V3(MetaDataV3 {
-                seq_number: SEQ_NUMBER,
-                attnets: EnrAttestationBitfield::<MainnetEthSpec>::default(),
-                syncnets: EnrSyncCommitteeBitfield::<MainnetEthSpec>::default(),
-                custody_group_count: spec.custody_requirement,
-            })
-        } else {
-            MetaData::V2(MetaDataV2 {
-                seq_number: SEQ_NUMBER,
-                attnets: EnrAttestationBitfield::<MainnetEthSpec>::default(),
-                syncnets: EnrSyncCommitteeBitfield::<MainnetEthSpec>::default(),
-            })
-        };
-
         let enr_key = CombinedKey::generate_secp256k1();
         let enr = enr::Enr::builder().build(&enr_key).unwrap();
+        let cgc_updates = CGCUpdates::new(spec.custody_requirement);
         let network_config = Arc::new(NetworkConfig::default());
         let network_globals = Arc::new(NetworkGlobals::new(
             enr,
-            meta_data,
+            cgc_updates,
             vec![],
             false,
             network_config,

@@ -430,11 +430,14 @@ impl<E: EthSpec> ValidatorMonitor<E> {
         let mut s = Self {
             validators: <_>::default(),
             indices: <_>::default(),
+            // Don't persist the last seen time of indices, and reset them to just seen on start-up.
+            // Otherwise if the node crashes for more than `ttl` it will forget that it had indices.
+            // We will only prune an index if it is not seen during runtime for longer than `ttl`.
             last_seen_local_validators: HashMap::from_iter(
                 persisted_local_indices
                     .indices
-                    .iter()
-                    .map(|e| (e.index, Duration::from_secs(e.last_seen_timestamp_sec))),
+                    .into_iter()
+                    .map(|index| (index, timestamp_now())),
             ),
             auto_register,
             individual_tracking_threshold,
@@ -465,7 +468,6 @@ impl<E: EthSpec> ValidatorMonitor<E> {
     /// Prunes all validators not seen for longer than `ttl` (time to live)
     pub fn prune_registered_local_validators(&mut self, ttl: Duration) {
         let now = timestamp_now();
-        // Prune expired keys
         self.last_seen_local_validators
             .retain(|_, last_seen| now - *last_seen < ttl);
     }
@@ -479,12 +481,8 @@ impl<E: EthSpec> ValidatorMonitor<E> {
     pub fn to_persisted_local_validators(&self) -> Result<PersistedLocalIndices, ssz_types::Error> {
         Ok(PersistedLocalIndices {
             indices: VariableList::new(
-                self.last_seen_local_validators
-                    .iter()
-                    .map(|(index, last_seen)| PersistedLocalIndex {
-                        index: *index,
-                        last_seen_timestamp_sec: last_seen.as_secs(),
-                    })
+                self.get_registered_local_validators()
+                    .copied()
                     .collect::<Vec<_>>(),
             )?,
         })
@@ -2452,13 +2450,7 @@ fn min_opt<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
 // Using 524288 as a really high limit that's never meant to be reached
 #[derive(Encode, Decode, Default)]
 pub struct PersistedLocalIndices {
-    indices: VariableList<PersistedLocalIndex, U524288>,
-}
-
-#[derive(Encode, Decode)]
-pub struct PersistedLocalIndex {
-    index: u64,
-    last_seen_timestamp_sec: u64,
+    indices: VariableList<u64, U524288>,
 }
 
 impl StoreItem for PersistedLocalIndices {

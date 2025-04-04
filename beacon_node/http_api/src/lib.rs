@@ -87,11 +87,11 @@ use tokio_stream::{
 use tracing::{debug, error, info, warn};
 use types::{
     fork_versioned_response::EmptyMetadata, Attestation, AttestationData, AttestationShufflingId,
-    AttesterSlashing, BeaconStateError, ChainSpec, Checkpoint, CommitteeCache, ConfigAndPreset,
-    Epoch, EthSpec, ForkName, ForkVersionedResponse, Hash256, ProposerPreparationData,
-    ProposerSlashing, RelativeEpoch, SignedAggregateAndProof, SignedBlindedBeaconBlock,
-    SignedBlsToExecutionChange, SignedContributionAndProof, SignedValidatorRegistrationData,
-    SignedVoluntaryExit, Slot, SyncCommitteeMessage, SyncContributionData,
+    AttesterSlashing, BeaconStateError, Checkpoint, CommitteeCache, ConfigAndPreset, Epoch,
+    EthSpec, ForkName, ForkVersionedResponse, Hash256, ProposerPreparationData, ProposerSlashing,
+    RelativeEpoch, SignedAggregateAndProof, SignedBlindedBeaconBlock, SignedBlsToExecutionChange,
+    SignedContributionAndProof, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot,
+    SyncCommitteeMessage, SyncContributionData,
 };
 use validator::pubkey_to_validator_index;
 use version::{
@@ -2907,11 +2907,9 @@ pub fn serve<T: BeaconChainTypes>(
         .and(warp::path::end())
         .and(task_spawner_filter.clone())
         .and(network_globals.clone())
-        .and(chain_filter.clone())
         .then(
             |task_spawner: TaskSpawner<T::EthSpec>,
-             network_globals: Arc<NetworkGlobals<T::EthSpec>>,
-             chain: Arc<BeaconChain<T>>| {
+             network_globals: Arc<NetworkGlobals<T::EthSpec>>| {
                 task_spawner.blocking_json_task(Priority::P1, move || {
                     let enr = network_globals.local_enr();
                     let p2p_addresses = enr.multiaddr_p2p_tcp();
@@ -2921,10 +2919,7 @@ pub fn serve<T: BeaconChainTypes>(
                         enr,
                         p2p_addresses,
                         discovery_addresses,
-                        metadata: from_meta_data::<T::EthSpec>(
-                            &network_globals.local_metadata(),
-                            &chain.spec,
-                        ),
+                        metadata: from_meta_data::<T::EthSpec>(&network_globals.local_metadata()),
                     }))
                 })
             },
@@ -4815,32 +4810,26 @@ pub fn serve<T: BeaconChainTypes>(
     Ok(http_server)
 }
 
-fn from_meta_data<E: EthSpec>(meta_data: &MetaData<E>, spec: &ChainSpec) -> api_types::MetaData {
+fn from_meta_data<E: EthSpec>(meta_data: &MetaData<E>) -> api_types::MetaData {
     let format_hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
 
-    let seq_number = *meta_data.seq_number();
-    let attnets = format_hex(&meta_data.attnets().clone().into_bytes());
-    let syncnets = format_hex(
-        &meta_data
-            .syncnets()
-            .cloned()
-            .unwrap_or_default()
-            .into_bytes(),
-    );
-
-    if spec.is_peer_das_scheduled() {
-        api_types::MetaData::V3(api_types::MetaDataV3 {
-            seq_number,
-            attnets,
-            syncnets,
-            custody_group_count: meta_data.custody_group_count().cloned().unwrap_or_default(),
-        })
-    } else {
-        api_types::MetaData::V2(api_types::MetaDataV2 {
-            seq_number,
-            attnets,
-            syncnets,
-        })
+    match meta_data {
+        MetaData::V1(meta_data) => api_types::MetaData::V2(api_types::MetaDataV2 {
+            seq_number: meta_data.seq_number,
+            attnets: format_hex(meta_data.attnets.as_slice()),
+            syncnets: format_hex(<_>::default()),
+        }),
+        MetaData::V2(meta_data) => api_types::MetaData::V2(api_types::MetaDataV2 {
+            seq_number: meta_data.seq_number,
+            attnets: format_hex(meta_data.attnets.as_slice()),
+            syncnets: format_hex(meta_data.syncnets.as_slice()),
+        }),
+        MetaData::V3(meta_data) => api_types::MetaData::V3(api_types::MetaDataV3 {
+            seq_number: meta_data.seq_number,
+            attnets: format_hex(meta_data.attnets.as_slice()),
+            syncnets: format_hex(meta_data.syncnets.as_slice()),
+            custody_group_count: meta_data.custody_group_count,
+        }),
     }
 }
 
