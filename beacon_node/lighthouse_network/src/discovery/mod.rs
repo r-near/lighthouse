@@ -418,11 +418,8 @@ impl<E: EthSpec> Discovery<E> {
         self.discv5
             .enr_insert(enr_field, &port)
             .map_err(|e| format!("{:?}", e))?;
+        self.on_enr_updated();
 
-        // replace the global version
-        self.network_globals.set_enr(self.discv5.local_enr());
-        // persist modified enr to disk
-        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(true)
     }
 
@@ -454,11 +451,8 @@ impl<E: EthSpec> Discovery<E> {
         self.discv5
             .enr_insert(enr_field, &port)
             .map_err(|e| format!("{:?}", e))?;
+        self.on_enr_updated();
 
-        // replace the global version
-        self.network_globals.set_enr(self.discv5.local_enr());
-        // persist modified enr to disk
-        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(true)
     }
 
@@ -469,10 +463,8 @@ impl<E: EthSpec> Discovery<E> {
     pub fn update_enr_udp_socket(&mut self, socket_addr: SocketAddr) -> Result<(), String> {
         const IS_TCP: bool = false;
         if self.discv5.update_local_enr_socket(socket_addr, IS_TCP) {
-            // persist modified enr to disk
-            enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
+            self.on_enr_updated();
         }
-        self.network_globals.set_enr(self.discv5.local_enr());
         Ok(())
     }
 
@@ -480,7 +472,7 @@ impl<E: EthSpec> Discovery<E> {
     pub fn update_enr_bitfield(&mut self, subnet: Subnet, value: bool) -> Result<(), String> {
         let local_enr = self.discv5.local_enr();
 
-        match subnet {
+        let updated_enr = match subnet {
             Subnet::Attestation(id) => {
                 let id = *id as usize;
                 let mut current_bitfield = local_enr.attestation_bitfield::<E>()?;
@@ -507,12 +499,10 @@ impl<E: EthSpec> Discovery<E> {
                 })?;
 
                 // insert the bitfield into the ENR record
-                self.discv5
-                    .enr_insert::<Bytes>(
-                        ATTESTATION_BITFIELD_ENR_KEY,
-                        &current_bitfield.as_ssz_bytes().into(),
-                    )
-                    .map_err(|e| format!("{:?}", e))?;
+                self.enr_insert_bytes(
+                    ATTESTATION_BITFIELD_ENR_KEY,
+                    &current_bitfield.as_ssz_bytes().into(),
+                )?
             }
             Subnet::SyncCommittee(id) => {
                 let id = *id as usize;
@@ -541,22 +531,19 @@ impl<E: EthSpec> Discovery<E> {
                 })?;
 
                 // insert the bitfield into the ENR record
-                self.discv5
-                    .enr_insert::<Bytes>(
-                        SYNC_COMMITTEE_BITFIELD_ENR_KEY,
-                        &current_bitfield.as_ssz_bytes().into(),
-                    )
-                    .map_err(|e| format!("{:?}", e))?;
+                self.enr_insert_bytes(
+                    SYNC_COMMITTEE_BITFIELD_ENR_KEY,
+                    &current_bitfield.as_ssz_bytes().into(),
+                )?
             }
             // Data column subnets are computed from node ID. No subnet bitfield in the ENR.
             Subnet::DataColumn(_) => return Ok(()),
+        };
+
+        if updated_enr {
+            self.on_enr_updated();
         }
 
-        // replace the global version
-        self.network_globals.set_enr(self.discv5.local_enr());
-
-        // persist modified enr to disk
-        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(())
     }
 
@@ -587,16 +574,12 @@ impl<E: EthSpec> Discovery<E> {
                 )
             });
 
-        // replace the global version with discovery version
-        self.network_globals.set_enr(self.discv5.local_enr());
-
-        // persist modified enr to disk
-        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
+        self.on_enr_updated();
     }
 
     /// Updates the `cgc` field of our local ENR.
     pub fn update_cgc_enr(&mut self, cgc: u64) -> Result<bool, String> {
-        if let Ok(current_cgc) = self.local_enr().custody_group_count(&self.spec) {
+        if let Ok(Some(current_cgc)) = self.local_enr().custody_group_count(&self.spec) {
             if current_cgc == cgc {
                 return Ok(false);
             }
@@ -605,12 +588,8 @@ impl<E: EthSpec> Discovery<E> {
         self.discv5
             .enr_insert(ETH2_ENR_KEY, &cgc)
             .map_err(|e| format!("{:?}", e))?;
+        self.on_enr_updated();
 
-        // replace the global version with discovery version
-        self.network_globals.set_enr(self.discv5.local_enr());
-
-        // persist modified enr to disk
-        enr::save_enr_to_disk(Path::new(&self.enr_dir), &self.local_enr());
         Ok(true)
     }
 
@@ -975,6 +954,32 @@ impl<E: EthSpec> Discovery<E> {
         }
         None
     }
+
+    /// Inserts Bytes into our local ENR. Returns true if we inserted a new value.
+    fn enr_insert_bytes(&self, key: &str, value: &Bytes) -> Result<bool, String> {
+        Ok(
+            match self
+                .discv5
+                .enr_insert(key, value)
+                .map_err(|e| format!("{e:?}"))?
+            {
+                // If previous value is distinct we inserted
+                Some(prev_value) => prev_value != value.to_vec(),
+                // No previous value, we inserted
+                None => true,
+            },
+        )
+    }
+
+    fn on_enr_updated(&mut self) {
+        let enr = self.discv5.local_enr();
+        // persist modified enr to disk
+        enr::save_enr_to_disk(Path::new(&self.enr_dir), &enr);
+        // replace the global version
+        if let Err(e) = self.network_globals.set_enr(enr) {
+            crit!(error = ?e, "Updated local ENR field to an invalid value");
+        }
+    }
 }
 
 /* NetworkBehaviour Implementation */
@@ -1029,6 +1034,8 @@ impl<E: EthSpec> NetworkBehaviour for Discovery<E> {
             return Poll::Ready(ToSwarm::GenerateEvent(DiscoveredPeers { peers }));
         }
 
+        let mut update_enr = false;
+
         // Process the server event stream
         match self.event_stream {
             EventStream::Awaiting(ref mut fut) => {
@@ -1076,11 +1083,8 @@ impl<E: EthSpec> NetworkBehaviour for Discovery<E> {
                             {
                                 // Update the TCP port in the ENR
                                 self.discv5.update_local_enr_socket(socket_addr, true);
+                                update_enr = true;
                             }
-                            let enr = self.discv5.local_enr();
-                            enr::save_enr_to_disk(Path::new(&self.enr_dir), &enr);
-                            // update  network globals
-                            self.network_globals.set_enr(enr);
                             // A new UDP socket has been detected.
                             // NOTE: We assume libp2p itself can keep track of IP changes and we do
                             // not inform it about IP changes found via discovery.
@@ -1090,6 +1094,12 @@ impl<E: EthSpec> NetworkBehaviour for Discovery<E> {
                 }
             }
         }
+
+        // Need to do this call after the `self.event_stream` match to release its mut ref.
+        if update_enr {
+            self.on_enr_updated();
+        }
+
         Poll::Pending
     }
 
@@ -1235,7 +1245,8 @@ mod tests {
             false,
             config.clone(),
             spec.clone(),
-        );
+        )
+        .unwrap();
         let keypair = keypair.into();
         Discovery::new(keypair, &config, Arc::new(globals), &spec)
             .await

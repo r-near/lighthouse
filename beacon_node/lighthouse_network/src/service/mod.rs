@@ -1,5 +1,6 @@
 use self::gossip_cache::GossipCache;
 use crate::config::{gossipsub_config, GossipsubConfigParams, NetworkLoad};
+use crate::discovery::enr::Eth2Enr;
 use crate::discovery::{
     subnet_predicate, DiscoveredPeers, Discovery, FIND_NODE_QUERY_CLOSEST_PEERS,
 };
@@ -18,7 +19,6 @@ use crate::types::{
     GossipEncoding, GossipKind, GossipTopic, SnappyTransform, Subnet, SubnetDiscovery,
 };
 use crate::EnrExt;
-use crate::Eth2Enr;
 use crate::{metrics, Enr, NetworkGlobals, PubsubMessage, TopicHash};
 use api_types::{AppRequestId, PeerRequestId, RequestId, Response};
 use futures::stream::StreamExt;
@@ -213,7 +213,7 @@ impl<E: EthSpec> Network<E> {
             config.disable_peer_scoring,
             config.clone(),
             ctx.chain_spec.clone(),
-        );
+        )?;
         let network_globals = Arc::new(globals);
 
         // Grab our local ENR FORK ID

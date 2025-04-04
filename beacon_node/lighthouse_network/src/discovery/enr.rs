@@ -40,7 +40,7 @@ pub trait Eth2Enr {
     ) -> Result<EnrSyncCommitteeBitfield<E>, &'static str>;
 
     /// The peerdas custody group count associated with the ENR.
-    fn custody_group_count(&self, spec: &ChainSpec) -> Result<u64, &'static str>;
+    fn custody_group_count(&self, spec: &ChainSpec) -> Result<Option<u64>, &'static str>;
 
     fn eth2(&self) -> Result<EnrForkId, &'static str>;
 }
@@ -68,11 +68,14 @@ impl Eth2Enr for Enr {
             .map_err(|_| "Could not decode the ENR syncnets bitfield")
     }
 
-    fn custody_group_count(&self, spec: &ChainSpec) -> Result<u64, &'static str> {
-        let cgc = self
+    fn custody_group_count(&self, spec: &ChainSpec) -> Result<Option<u64>, &'static str> {
+        let Some(cgc) = self
             .get_decodable::<u64>(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY)
-            .ok_or("ENR custody group count non-existent")?
-            .map_err(|_| "Could not decode the ENR custody group count")?;
+            .transpose()
+            .map_err(|_| "Could not decode the ENR custody group count")?
+        else {
+            return Ok(None);
+        };
 
         if cgc < spec.custody_requirement {
             return Err("ENR CGC < custody_requirement");
@@ -80,7 +83,7 @@ impl Eth2Enr for Enr {
         if cgc > spec.number_of_custody_groups {
             return Err("ENR CGC > number_of_custody_groups");
         }
-        Ok(cgc)
+        Ok(Some(cgc))
     }
 
     fn eth2(&self) -> Result<EnrForkId, &'static str> {
@@ -365,7 +368,7 @@ mod test {
         let enr = build_enr_with_config(config, &spec).0;
 
         assert_eq!(
-            enr.custody_group_count(&spec).unwrap(),
+            enr.custody_group_count(&spec).unwrap().unwrap(),
             spec.custody_requirement,
         );
     }
@@ -380,7 +383,7 @@ mod test {
         let enr = build_enr_with_config(config, &spec).0;
 
         assert_eq!(
-            enr.custody_group_count(&spec).unwrap(),
+            enr.custody_group_count(&spec).unwrap().unwrap(),
             spec.number_of_custody_groups,
         );
     }

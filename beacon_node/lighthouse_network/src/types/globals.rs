@@ -1,10 +1,10 @@
 //! A collection of variables that are accessible outside of the network thread itself.
 use super::TopicConfig;
-use crate::discovery::enr::Eth2Enr;
 use crate::peer_manager::peerdb::PeerDB;
-use crate::rpc::{MetaData, MetaDataV2, MetaDataV3};
+use crate::rpc::MetaData;
 use crate::types::{BackFillState, SyncState};
 use crate::{Client, Enr, EnrExt, GossipTopic, Multiaddr, NetworkConfig, PeerId};
+use local_metadata::LocalMetadata;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use types::{CGCUpdates, ChainSpec, ColumnIndex, DataColumnSubnetId, EthSpec, Slo
 
 pub struct NetworkGlobals<E: EthSpec> {
     /// The current local ENR.
-    local_enr: RwLock<Enr>,
+    local_enr: RwLock<LocalMetadata<E>>,
     /// The local peer_id.
     pub peer_id: RwLock<PeerId>,
     /// Listening multiaddrs.
@@ -47,7 +47,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
         disable_peer_scoring: bool,
         config: Arc<NetworkConfig>,
         spec: Arc<ChainSpec>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let node_id = enr.node_id().raw();
 
         // The below `expect` calls will panic on start up if the chain spec config values used
@@ -69,8 +69,8 @@ impl<E: EthSpec> NetworkGlobals<E> {
             all_sampling_columns.extend(columns);
         }
 
-        NetworkGlobals {
-            local_enr: RwLock::new(enr.clone()),
+        Ok(NetworkGlobals {
+            local_enr: RwLock::new(LocalMetadata::new(enr.clone(), &spec)?),
             peer_id: RwLock::new(enr.peer_id()),
             listen_multiaddrs: RwLock::new(Vec::new()),
             peers: RwLock::new(PeerDB::new(trusted_peers, disable_peer_scoring)),
@@ -82,18 +82,19 @@ impl<E: EthSpec> NetworkGlobals<E> {
             cgc_updates: RwLock::new(cgc_updates),
             config,
             spec,
-        }
+        })
     }
 
     /// Returns the local ENR from the underlying Discv5 behaviour that external peers may connect
     /// to.
     /// TODO: This contains duplicate metadata. Test who is consuming this method
     pub fn local_enr(&self) -> Enr {
-        self.local_enr.read().clone()
+        self.local_enr.read().enr().clone()
     }
 
-    pub fn set_enr(&self, enr: Enr) {
-        *self.local_enr.write() = enr;
+    pub fn set_enr(&self, enr: Enr) -> Result<(), String> {
+        *self.local_enr.write() = LocalMetadata::new(enr, &self.spec)?;
+        Ok(())
     }
 
     /// Returns the local libp2p PeerID.
@@ -104,28 +105,7 @@ impl<E: EthSpec> NetworkGlobals<E> {
     // TODO: Must keep consistency between the persisted `local_enr` and the return of this
     // function. Otherwise peers may downscore us and the network will have issues.
     pub fn local_metadata(&self) -> MetaData<E> {
-        let enr = self.local_enr();
-        let attnets = enr
-            .attestation_bitfield::<E>()
-            .unwrap_or(Default::default());
-        let syncnets = enr
-            .sync_committee_bitfield::<E>()
-            .unwrap_or(Default::default());
-
-        if self.spec.is_peer_das_scheduled() {
-            MetaData::V3(MetaDataV3 {
-                seq_number: enr.seq(),
-                attnets,
-                syncnets,
-                custody_group_count: self.public_custody_group_count(),
-            })
-        } else {
-            MetaData::V2(MetaDataV2 {
-                seq_number: enr.seq(),
-                attnets,
-                syncnets,
-            })
-        }
+        self.local_enr.read().metadata().clone()
     }
 
     /// Returns the list of `Multiaddr` that the underlying libp2p instance is listening on.
@@ -152,12 +132,6 @@ impl<E: EthSpec> NetworkGlobals<E> {
     pub fn sampling_subnets_for_cgc(&self, cgc: u64) -> &[DataColumnSubnetId] {
         // Returns as many elements as possible, can't panic as it's upper bounded by len
         &self.all_sampling_subnets[..self.all_sampling_subnets.len().min(cgc as usize)]
-    }
-
-    fn public_custody_group_count(&self) -> u64 {
-        // TODO(das): delay announcing the public custody count for the duration of the pruning
-        // period
-        self.cgc_updates.read().at_slot(Slot::new(u64::MAX))
     }
 
     /// Returns the custody group count (CGC)
@@ -276,7 +250,54 @@ impl<E: EthSpec> NetworkGlobals<E> {
         let enr_key: discv5::enr::CombinedKey = discv5::enr::CombinedKey::from_secp256k1(&keypair);
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
         let cgc_updates = CGCUpdates::new(initial_cgc);
-        NetworkGlobals::new(enr, cgc_updates, trusted_peers, false, config, spec)
+        NetworkGlobals::new(enr, cgc_updates, trusted_peers, false, config, spec).unwrap()
+    }
+}
+
+mod local_metadata {
+    use crate::discovery::enr::Eth2Enr;
+    use crate::rpc::{MetaData, MetaDataV2, MetaDataV3};
+    use crate::Enr;
+    use types::{ChainSpec, EthSpec};
+
+    /// Ensures that the cached local ENR and its parsed MetaData are updated atomically.
+    pub struct LocalMetadata<E: EthSpec> {
+        enr: Enr,
+        metadata: MetaData<E>,
+    }
+
+    impl<E: EthSpec> LocalMetadata<E> {
+        pub fn new(enr: Enr, spec: &ChainSpec) -> Result<Self, String> {
+            let attnets = enr.attestation_bitfield::<E>()?;
+            let syncnets = enr.sync_committee_bitfield::<E>()?;
+
+            let metadata = if spec.is_peer_das_scheduled() {
+                MetaData::V3(MetaDataV3 {
+                    seq_number: enr.seq(),
+                    attnets,
+                    syncnets,
+                    custody_group_count: enr
+                        .custody_group_count(spec)?
+                        .unwrap_or(spec.custody_requirement),
+                })
+            } else {
+                MetaData::V2(MetaDataV2 {
+                    seq_number: enr.seq(),
+                    attnets,
+                    syncnets,
+                })
+            };
+
+            Ok(Self { enr, metadata })
+        }
+
+        pub fn enr(&self) -> &Enr {
+            &self.enr
+        }
+
+        pub fn metadata(&self) -> &MetaData<E> {
+            &self.metadata
+        }
     }
 }
 

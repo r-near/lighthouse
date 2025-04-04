@@ -141,14 +141,17 @@ pub async fn create_api_server_with_config<T: BeaconChainTypes>(
     let enr = Enr::builder().build(&enr_key).unwrap();
     let network_config = Arc::new(NetworkConfig::default());
     let cgc_updates = CGCUpdates::new(chain.spec.custody_requirement);
-    let network_globals = Arc::new(NetworkGlobals::new(
-        enr.clone(),
-        cgc_updates,
-        vec![],
-        false,
-        network_config,
-        chain.spec.clone(),
-    ));
+    let network_globals = Arc::new(
+        NetworkGlobals::new(
+            enr.clone(),
+            cgc_updates,
+            vec![],
+            false,
+            network_config,
+            chain.spec.clone(),
+        )
+        .unwrap(),
+    );
 
     // Only a peer manager can add peers, so we create a dummy manager.
     let config = lighthouse_network::peer_manager::config::Config::default();
