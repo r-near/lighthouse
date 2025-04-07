@@ -120,12 +120,19 @@ pub enum Notification {
     Finalization(FinalizationNotification),
     Reconstruction,
     PruneBlobs(Epoch),
+    ManualFinalization(ManualFinalizationNotification),
+    ManualCompaction,
+}
+
+pub struct ManualFinalizationNotification {
+    pub state_root: BeaconStateHash,
+    pub checkpoint: Checkpoint,
 }
 
 pub struct FinalizationNotification {
-    finalized_state_root: BeaconStateHash,
-    finalized_checkpoint: Checkpoint,
-    prev_migration: Arc<Mutex<PrevMigration>>,
+    pub finalized_state_root: BeaconStateHash,
+    pub finalized_checkpoint: Checkpoint,
+    pub prev_migration: Arc<Mutex<PrevMigration>>,
 }
 
 impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Hot, Cold> {
@@ -172,6 +179,22 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         }
 
         Ok(())
+    }
+
+    pub fn process_manual_compaction(&self) {
+        if let Some(Notification::ManualCompaction) =
+            self.send_background_notification(Notification::ManualCompaction)
+        {
+            Self::run_manual_compaction(self.db.clone());
+        }
+    }
+
+    pub fn process_manual_finalization(&self, notif: ManualFinalizationNotification) {
+        if let Some(Notification::ManualFinalization(notif)) =
+            self.send_background_notification(Notification::ManualFinalization(notif))
+        {
+            Self::run_manual_migration(self.db.clone(), notif);
+        }
     }
 
     pub fn process_reconstruction(&self) {
@@ -264,6 +287,23 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         }
     }
 
+    fn run_manual_migration(
+        db: Arc<HotColdDB<E, Hot, Cold>>,
+        notif: ManualFinalizationNotification,
+    ) {
+        // We create a "dummy" prev migration
+        let prev_migration = PrevMigration {
+            epoch: Epoch::new(1),
+            epochs_per_migration: 2,
+        };
+        let notif = FinalizationNotification {
+            finalized_state_root: notif.state_root,
+            finalized_checkpoint: notif.checkpoint,
+            prev_migration: Arc::new(prev_migration.into()),
+        };
+        Self::run_migration(db, notif);
+    }
+
     /// Perform the actual work of `process_finalization`.
     fn run_migration(db: Arc<HotColdDB<E, Hot, Cold>>, notif: FinalizationNotification) {
         // Do not run too frequently.
@@ -290,7 +330,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         let finalized_state_root = notif.finalized_state_root;
         let finalized_block_root = notif.finalized_checkpoint.root;
 
-        let finalized_state = match db.get_state(&finalized_state_root.into(), None) {
+        // The enshrined finalized state should be in the state cache.
+        let finalized_state = match db.get_state(&finalized_state_root.into(), None, true) {
             Ok(Some(state)) => state,
             other => {
                 error!(
@@ -376,6 +417,15 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         debug!("Database consolidation complete");
     }
 
+    fn run_manual_compaction(db: Arc<HotColdDB<E, Hot, Cold>>) {
+        debug!("Running manual compaction");
+        if let Err(error) = db.compact() {
+            warn!(?error, "Database compaction failed");
+        } else {
+            debug!("Manual compaction completed");
+        }
+    }
+
     /// Spawn a new child thread to run the migration process.
     ///
     /// Return a channel handle for sending requests to the thread.
@@ -388,16 +438,30 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             while let Ok(notif) = rx.recv() {
                 let mut reconstruction_notif = None;
                 let mut finalization_notif = None;
+                let mut manual_finalization_notif = None;
+                let mut manual_compaction_notif = None;
                 let mut prune_blobs_notif = None;
                 match notif {
                     Notification::Reconstruction => reconstruction_notif = Some(notif),
                     Notification::Finalization(fin) => finalization_notif = Some(fin),
+                    Notification::ManualFinalization(fin) => manual_finalization_notif = Some(fin),
                     Notification::PruneBlobs(dab) => prune_blobs_notif = Some(dab),
+                    Notification::ManualCompaction => manual_compaction_notif = Some(notif),
                 }
                 // Read the rest of the messages in the channel, taking the best of each type.
                 for notif in rx.try_iter() {
                     match notif {
                         Notification::Reconstruction => reconstruction_notif = Some(notif),
+                        Notification::ManualCompaction => manual_compaction_notif = Some(notif),
+                        Notification::ManualFinalization(fin) => {
+                            if let Some(current) = manual_finalization_notif.as_mut() {
+                                if fin.checkpoint.epoch > current.checkpoint.epoch {
+                                    *current = fin;
+                                }
+                            } else {
+                                manual_finalization_notif = Some(fin);
+                            }
+                        }
                         Notification::Finalization(fin) => {
                             if let Some(current) = finalization_notif.as_mut() {
                                 if fin.finalized_checkpoint.epoch
@@ -420,11 +484,17 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 if let Some(fin) = finalization_notif {
                     Self::run_migration(db.clone(), fin);
                 }
+                if let Some(fin) = manual_finalization_notif {
+                    Self::run_manual_migration(db.clone(), fin);
+                }
                 if let Some(dab) = prune_blobs_notif {
                     Self::run_prune_blobs(db.clone(), dab);
                 }
                 if reconstruction_notif.is_some() {
                     Self::run_reconstruction(db.clone(), Some(inner_tx.clone()));
+                }
+                if manual_compaction_notif.is_some() {
+                    Self::run_manual_compaction(db.clone());
                 }
             }
         });
@@ -454,11 +524,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
             .into());
         }
-
-        // TODO(hdiff): if we remove the check of `old_finalized_slot > new_finalized_slot` can we
-        // ensure that a single pruning operation is running at once? If a pruning run is triggered
-        // with an old finalized checkpoint it can derive a stale hdiff set of slots and delete
-        // future ones that are necessary breaking the DB.
 
         debug!(
             split_prior_to_migration = ?split_prior_to_migration,
@@ -497,6 +562,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             .iter()
             .filter(|(_, s)| s.slot >= split_prior_to_migration.slot)
             .collect::<Vec<_>>();
+
         // Because of the additional HDiffs kept for the grid prior to finalization the tree_roots
         // function will consider them roots. Those are expected. We just want to assert that the
         // relevant tree of states (post-split) is well-formed.
@@ -599,8 +665,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
                     // In the diagram below, `o` are diffs by slot that we must keep. In the prior
                     // finalized section there's only one chain so we preserve them unconditionally.
-                    // For the newly finalized chain, we check which of is canonical and only keep
-                    // those. Slots below `min_finalized_state_slot` we don't have canonical
+                    // For the newly finalized chain, we check which of these is canonical and only
+                    // keep those. Slots below `min_finalized_state_slot` we don't have canonical
                     // information so we assume they are part of the finalized pruned chain.
                     //
                     //                  /-----o----
@@ -627,7 +693,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
             }
         }
 
-        for (block_root, block_slot) in state_summaries_dag.iter_blocks() {
+        for (block_root, slot) in state_summaries_dag.iter_blocks() {
             // Blocks both finalized and unfinalized are in the same DB column. We must only
             // prune blocks from abandoned forks. Note that block pruning and state pruning differ.
             // The blocks DB column is shared for hot and cold data, while the states have different
@@ -639,12 +705,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 // itself Note that we anchor this set on the finalized checkpoint instead of the
                 // finalized block. A diagram above shows a relevant example.
                 false
-            } else if newly_finalized_blocks.contains(&(block_root, block_slot)) {
+            } else if newly_finalized_blocks.contains(&(block_root, slot)) {
                 // Keep recently finalized blocks
                 false
-            } else if block_slot < newly_finalized_states_min_slot {
-                // Note: newly_finalized_states_min_slot == newly_finalized_blocks_min_slot
-                //
+            } else if slot < newly_finalized_states_min_slot {
                 // Keep recently finalized blocks that we know are canonical. Blocks with slots <
                 // that `newly_finalized_blocks_min_slot` we don't have canonical information so we
                 // assume they are part of the finalized pruned chain
@@ -687,16 +751,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // single log line of +1Kb and break logging setups. Log `new_finalized_state_root` as a
         // prunning ID to trace these individual logs to the above "Extra pruning information"
         for block_root in &blocks_to_prune {
-            debug!(
-                new_finalized_state_root = ?new_finalized_state_root,
-                block_root = ?block_root,
-                block_root = ?block_root,
-                "Pruning block"
-            );
+            debug!(?new_finalized_state_root, ?block_root, "Pruning block");
         }
         for (slot, state_root) in &states_to_prune {
             debug!(
-                new_finalized_state_root = ?new_finalized_state_root,
+                ?new_finalized_state_root,
                 ?state_root,
                 %slot,
                 "Pruning hot state"
@@ -729,14 +788,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
 
         store.do_atomically_with_block_and_blobs_cache(batch)?;
 
-        debug!(
-            new_finalized_state_root = ?new_finalized_state_root,
-            "Database pruning complete"
-        );
+        debug!(?new_finalized_state_root, "Database pruning complete");
 
         Ok(PruningOutcome::Successful {
-            // TODO(hdiff): approximation of the previous finalized checkpoint. Only used in the
-            // compaction to compute time, can we use something else?
+            // Approximation of the previous finalized checkpoint. Only used in the compaction to
+            // compute time since last compaction.
             old_finalized_checkpoint_epoch: newly_finalized_states_min_slot
                 .epoch(E::slots_per_epoch()),
         })

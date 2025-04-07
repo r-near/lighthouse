@@ -26,7 +26,7 @@ pub enum Error {
     SplitPointModified(Slot, Slot),
     ConfigError(StoreConfigError),
     MigrationError(String),
-    /// The store's `anchor_info` is still the default unitialized value when attempting a state
+    /// The store's `anchor_info` is still the default uninitialized value when attempting a state
     /// write
     AnchorUninitialized,
     /// The store's `anchor_info` was mutated concurrently, the latest modification wasn't applied.

@@ -73,7 +73,7 @@ pub struct HotColdDB<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> {
     /// Cache of beacon states.
     ///
     /// LOCK ORDERING: this lock must always be locked *after* the `split` if both are required.
-    state_cache: Mutex<StateCache<E>>,
+    pub state_cache: Mutex<StateCache<E>>,
     /// Cache of historic states and hierarchical diff buffers.
     ///
     /// This cache is never pruned. It is only populated in response to historical queries from the
@@ -223,7 +223,10 @@ impl<E: EthSpec> HotColdDB<E, MemoryStore<E>, MemoryStore<E>> {
             blobs_db: MemoryStore::open(),
             hot_db: MemoryStore::open(),
             block_cache: Mutex::new(BlockCache::new(config.block_cache_size)),
-            state_cache: Mutex::new(StateCache::new(config.state_cache_size)),
+            state_cache: Mutex::new(StateCache::new(
+                config.state_cache_size,
+                config.state_cache_headroom,
+            )),
             historic_state_cache: Mutex::new(HistoricStateCache::new(
                 config.hdiff_buffer_cache_size,
                 config.historic_state_cache_size,
@@ -275,7 +278,10 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
             cold_db: BeaconNodeBackend::open(&config, cold_path)?,
             hot_db,
             block_cache: Mutex::new(BlockCache::new(config.block_cache_size)),
-            state_cache: Mutex::new(StateCache::new(config.state_cache_size)),
+            state_cache: Mutex::new(StateCache::new(
+                config.state_cache_size,
+                config.state_cache_headroom,
+            )),
             historic_state_cache: Mutex::new(HistoricStateCache::new(
                 config.hdiff_buffer_cache_size,
                 config.historic_state_cache_size,
@@ -966,6 +972,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         &self,
         state_root: &Hash256,
         slot: Option<Slot>,
+        update_cache: bool,
     ) -> Result<Option<BeaconState<E>>, Error> {
         metrics::inc_counter(&metrics::BEACON_STATE_GET_COUNT);
 
@@ -977,10 +984,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 // chain. This way we avoid returning a state that doesn't match `state_root`.
                 self.load_cold_state(state_root)
             } else {
-                self.get_hot_state(state_root)
+                self.get_hot_state(state_root, update_cache)
             }
         } else {
-            match self.get_hot_state(state_root)? {
+            match self.get_hot_state(state_root, update_cache)? {
                 Some(state) => Ok(Some(state)),
                 None => self.load_cold_state(state_root),
             }
@@ -1030,8 +1037,9 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         } else {
             state_root
         };
+        // It's a bit redundant but we elect to cache the state here and down below.
         let mut opt_state = self
-            .load_hot_state(&state_root)
+            .load_hot_state(&state_root, true)
             .map_err(|e| {
                 Error::LoadingHotStateError(
                     format!("get advanced {block_root} {max_slot}"),
@@ -1044,14 +1052,19 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         if let Some((state_root, state)) = opt_state.as_mut() {
             state.update_tree_hash_cache()?;
             state.build_all_caches(&self.spec)?;
-            self.state_cache
-                .lock()
-                .put_state(*state_root, block_root, state)?;
-            debug!(
-                ?state_root,
-                slot = %state.slot(),
-                "Cached state"
-            );
+            if let PutStateOutcome::New(deleted_states) =
+                self.state_cache
+                    .lock()
+                    .put_state(*state_root, block_root, state)?
+            {
+                debug!(
+                    ?state_root,
+                    state_slot = %state.slot(),
+                    ?deleted_states,
+                    location = "get_advanced_hot_state",
+                    "Cached state",
+                );
+            }
         }
         drop(split);
         Ok(opt_state)
@@ -1243,7 +1256,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                             }
                         }
                     } else {
-                        // TODO(hdiff): should attempt to delete everything if slot is not available?
+                        // NOTE(hdiff): Attempt to delete both snapshots and diffs if we don't know
+                        // the slot.
                         key_value_batch.push(KeyValueStoreOp::DeleteKey(
                             DBColumn::BeaconStateHotSnapshot,
                             state_root.as_slice().to_vec(),
@@ -1460,18 +1474,31 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         // Avoid storing states in the database if they already exist in the state cache.
         // The exception to this is the finalized state, which must exist in the cache before it
         // is stored on disk.
-        if let PutStateOutcome::Duplicate = self.state_cache.lock().put_state(
+        match self.state_cache.lock().put_state(
             *state_root,
             state.get_latest_block_root(*state_root),
             state,
         )? {
-            debug!(
-                slot = %state.slot(),
-                ?state_root,
-                "State already exists in state cache"
-            );
-            // Write the state anyway. Testing of this branch shows that states may exist in the
-            // cache but not be yet ever stored in the DB
+            PutStateOutcome::New(deleted_states) => {
+                debug!(
+                    ?state_root,
+                    state_slot = %state.slot(),
+                    ?deleted_states,
+                    location = "store_hot_state",
+                    "Cached state",
+                );
+            }
+            PutStateOutcome::Duplicate => {
+                debug!(
+                    ?state_root,
+                    state_slot = %state.slot(),
+                    "State already exists in state cache",
+                );
+                // TODO(hdiff): do we still have issues with states being in the cache and not on
+                // disk? Maybe we need to ensure disk writes happen prior to cache inserts?
+                // return Ok(());
+            }
+            PutStateOutcome::Finalized => {} // Continue to store.
         }
 
         // TODO(hdiff): is this optimization necessary? Computing diffs is expensive so we may want
@@ -1576,7 +1603,11 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     }
 
     /// Get a post-finalization state from the database or store.
-    pub fn get_hot_state(&self, state_root: &Hash256) -> Result<Option<BeaconState<E>>, Error> {
+    pub fn get_hot_state(
+        &self,
+        state_root: &Hash256,
+        update_cache: bool,
+    ) -> Result<Option<BeaconState<E>>, Error> {
         if let Some(state) = self.state_cache.lock().get_by_state_root(*state_root) {
             return Ok(Some(state));
         }
@@ -1586,21 +1617,35 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             warn!(?state_root, "State cache missed");
         }
 
-        let state_from_disk = self.load_hot_state(state_root).map_err(|e| {
+        let state_from_disk = self.load_hot_state(state_root, update_cache).map_err(|e| {
             Error::LoadingHotStateError("get state".to_owned(), *state_root, e.into())
         })?;
 
         if let Some((mut state, block_root)) = state_from_disk {
             state.update_tree_hash_cache()?;
             state.build_all_caches(&self.spec)?;
-            self.state_cache
-                .lock()
-                .put_state(*state_root, block_root, &state)?;
-            debug!(
-                ?state_root,
-                slot = %state.slot(),
-                "Cached state"
-            );
+            if update_cache {
+                if let PutStateOutcome::New(deleted_states) =
+                    self.state_cache
+                        .lock()
+                        .put_state(*state_root, block_root, &state)?
+                {
+                    debug!(
+                        ?state_root,
+                        state_slot = %state.slot(),
+                        ?deleted_states,
+                        location = "get_hot_state",
+                        "Cached state",
+                    );
+                }
+            } else {
+                debug!(
+                    ?state_root,
+                    state_slot = %state.slot(),
+                    "Did not cache state",
+                );
+            }
+
             Ok(Some(state))
         } else {
             Ok(None)
@@ -1698,6 +1743,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     pub fn load_hot_state(
         &self,
         state_root: &Hash256,
+        update_cache: bool,
     ) -> Result<Option<(BeaconState<E>, Hash256)>, Error> {
         metrics::inc_counter(&metrics::BEACON_STATE_HOT_GET_COUNT);
 
@@ -1731,7 +1777,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                     let from_state_root = diff_base_state_root.get_root(from_slot)?;
 
                     let (mut base_state, _) = self
-                        .load_hot_state(&from_state_root)
+                        .load_hot_state(&from_state_root, update_cache)
                         .map_err(|e| {
                             Error::LoadingHotStateError(
                                 format!("load state ReplayFrom {from_slot}"),
@@ -1750,7 +1796,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                         .lock()
                         .rebase_on_finalized(&mut base_state, &self.spec)?;
 
-                    self.load_hot_state_using_replay(base_state, slot, latest_block_root)?
+                    self.load_hot_state_using_replay(
+                        base_state,
+                        slot,
+                        latest_block_root,
+                        update_cache,
+                    )?
                 }
             };
             state.apply_pending_mutations()?;
@@ -1766,6 +1817,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         base_state: BeaconState<E>,
         slot: Slot,
         latest_block_root: Hash256,
+        update_cache: bool,
     ) -> Result<BeaconState<E>, Error> {
         if base_state.slot() == slot {
             return Ok(base_state);
@@ -1773,8 +1825,43 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
         let blocks = self.load_blocks_to_replay(base_state.slot(), slot, latest_block_root)?;
         let _t = metrics::start_timer(&metrics::STORE_BEACON_REPLAY_HOT_BLOCKS_TIME);
+
+        // If replaying blocks, and `update_cache` is true, also cache the epoch boundary
+        // state that this state is based on. It may be useful as the basis of more states
+        // in the same epoch.
+        let state_cache_hook = |state_root, state: &mut BeaconState<E>| {
+            if !update_cache || state.slot() % E::slots_per_epoch() != 0 {
+                return Ok(());
+            }
+            // Ensure all caches are built before attempting to cache.
+            state.update_tree_hash_cache()?;
+            state.build_all_caches(&self.spec)?;
+
+            let latest_block_root = state.get_latest_block_root(state_root);
+            if let PutStateOutcome::New(_) =
+                self.state_cache
+                    .lock()
+                    .put_state(state_root, latest_block_root, state)?
+            {
+                debug!(
+                    ?state_root,
+                    state_slot = %state.slot(),
+                    descendant_slot = %slot,
+                    "Cached ancestor state",
+                );
+            }
+            Ok(())
+        };
+
         // FIXME(tree-states): reconsider caching
-        self.replay_blocks(base_state, blocks, slot, no_state_root_iter(), None)
+        // FIXME(tree-states): we could pass a summary-based state root iterator here
+        self.replay_blocks(
+            base_state,
+            blocks,
+            slot,
+            no_state_root_iter(),
+            Some(Box::new(state_cache_hook)),
+        )
     }
 
     pub fn store_cold_state_summary(
@@ -2870,10 +2957,15 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             return Ok(());
         };
 
-        // Load the split state so we can backtrack to find execution payloads.
-        let split_state = self.get_state(&split.state_root, Some(split.slot))?.ok_or(
-            HotColdDBError::MissingSplitState(split.state_root, split.slot),
-        )?;
+        // Load the split state so we can backtrack to find execution payloads. The split state
+        // should be in the state cache as the enshrined finalized state, so this should never
+        // cache miss.
+        let split_state = self
+            .get_state(&split.state_root, Some(split.slot), true)?
+            .ok_or(HotColdDBError::MissingSplitState(
+                split.state_root,
+                split.slot,
+            ))?;
 
         // The finalized block may or may not have its execution payload stored, depending on
         // whether it was at a skipped slot. However for a fully pruned database its parent
@@ -3262,8 +3354,10 @@ pub fn migrate_database<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
             );
             store.store_cold_state_summary(&state_root, slot, &mut cold_db_state_ops)?;
         } else {
+            // This is some state that we want to migrate to the freezer db.
+            // There is no reason to cache this state.
             let state: BeaconState<E> = store
-                .get_hot_state(&state_root)?
+                .get_hot_state(&state_root, false)?
                 .ok_or(HotColdDBError::MissingStateToFreeze(state_root))?;
 
             store.store_cold_state(&state_root, &state, &mut cold_db_state_ops)?;
