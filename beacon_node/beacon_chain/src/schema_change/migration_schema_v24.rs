@@ -280,10 +280,12 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
         .into_iter()
         .flat_map(|(_, summaries)| summaries)
     {
-        // If boundary state persist
+        // If boundary state persist.
+        // Do not cache these states as they are unlikely to be relevant later.
+        let update_cache = false;
         if summary.slot % T::EthSpec::slots_per_epoch() == 0 {
             let (state, _) = db
-                .load_hot_state(&state_root)?
+                .load_hot_state(&state_root, update_cache)?
                 .ok_or(Error::MissingState(state_root))?;
 
             // Immediately commit the state. Otherwise we will OOM and it's stored in a different

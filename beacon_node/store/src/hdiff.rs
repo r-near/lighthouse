@@ -654,10 +654,10 @@ impl HierarchyConfig {
 impl HierarchyModuli {
     /// * `slot` - Slot of the storage strategy
     /// * `start_slot` - Slot before which states are not available. Initial snapshot point, which
-    ///                  may not be aligned to the hierarchy moduli values. Given an example of
-    ///                  exponents [5,13,21], to reconstruct state at slot 3,000,003: if start = 3,000,002
-    ///                  layer 2 diff will point to the start snapshot instead of the layer 1 diff at
-    ///                  2998272.
+    ///   may not be aligned to the hierarchy moduli values. Given an example of
+    ///   exponents [5,13,21], to reconstruct state at slot 3,000,003: if start = 3,000,002
+    ///   layer 2 diff will point to the start snapshot instead of the layer 1 diff at
+    ///   2998272.
     pub fn storage_strategy(&self, slot: Slot, start_slot: Slot) -> Result<StorageStrategy, Error> {
         match slot.cmp(&start_slot) {
             Ordering::Less => return Err(Error::LessThanStart(slot, start_slot)),
