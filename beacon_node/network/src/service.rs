@@ -51,6 +51,8 @@ const UNSUBSCRIBE_DELAY_EPOCHS: u64 = 2;
 const VALIDATOR_SUBSCRIPTION_MESSAGE_QUEUE_SIZE: usize = 65_536;
 /// Seconds to expire a local validator registration
 const LOCAL_VALIDATOR_REGISTRY_TTL_SEC: u64 = 60 * 60;
+/// Max distance in slots that will be dropped to restart backfill if CGC increases
+const MAX_SLOT_DISTANCE_BACKFILL_RESTART: u64 = 1200;
 
 /// Types of messages that the network service can receive.
 #[derive(Debug, IntoStaticStr)]
@@ -887,7 +889,11 @@ impl<T: BeaconChainTypes> NetworkService<T> {
             .spec
             .custody_group_by_balance(known_validators_balance);
 
-        if next_cgc != prev_cgc {
+        // TODO(das): For now do not support a decrease in CGC. If we allow to decrease and increase
+        // we can have a scaled plot over time of `CGC(time)` where `min(CGC(time))` is not the
+        // oldest value. We would need to adjust some logic below to consider the minimum value
+        // through a range of slots, instead of the value at the oldest slot.
+        if next_cgc > prev_cgc {
             // TODO(das): Should we consider the case where the clock is almost at the end of the epoch?
             // If I/O is slow we may update the in-memory map for an epoch that's already
             // progressing.
@@ -943,6 +949,49 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         // backfill sync to start over from it. Then make backfill sync use a higher CGC (say 128)
         // and when oldest_block is less than the oldest step with a value < 128 we can delete that
         // step such that `custody_group_count(clock - da_window)` returns 128.
+        //
+        //                    CGC 128
+        //             :      ___________:____________
+        //             :     |           :
+        // CGC 8       :     |           :
+        // ............:_____|           :
+        //             : WS start        : Finalized
+        //     <------   block             block
+        //  backfill
+        //  with CGC 8
+        //
+        //
+        //
+        //                    CGC 128
+        // .............................. ___________:____________
+        //                               :
+        //                               :
+        //                               :
+        //                               : Finalized
+        //                       <------   block
+        //                   backfill
+        //                   with CGC 128
+        //
+        let oldest_block_slot = self.beacon_chain.store.get_anchor_info().oldest_block_slot;
+        let finalized_slot = self.beacon_chain.finalized_slot();
+        let cgc_at_oldest_block_slot = self.network_globals.custody_group_count(oldest_block_slot);
+        let cgc_at_finalized_slot = self.network_globals.custody_group_count(finalized_slot);
+        // TODO(das): If we support a decreasing CGC we must consider the min value between this two
+        // slots.
+        if cgc_at_oldest_block_slot < cgc_at_finalized_slot {
+            let backfill_started_recently = finalized_slot.saturating_sub(oldest_block_slot)
+                < MAX_SLOT_DISTANCE_BACKFILL_RESTART;
+            // Note: we don't check if backfill finished. If it did because we are close to genesis,
+            // we want to restart it anyway to backfill with the CGC. The only condition to NOT
+            // restart is if backfill went too far and thus we would waste too much bandwidth
+            // fetching the blocks again.
+            if backfill_started_recently {
+                // We need backfill sync to fetch batches with `CGC_f = cgc_at_finalized_slot`. Then
+                // `custody_group_count(oldest_block_slot) should now return `CGC_f`. So we have to
+                // delete the CGC updates with `update.slot < finalized_slot`
+                todo!();
+            }
+        }
 
         // Schedule an advertise CGC update for later
         // TODO(das): use min_epochs_for_data_columns

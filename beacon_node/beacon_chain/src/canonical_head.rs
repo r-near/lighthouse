@@ -439,6 +439,15 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             .slot()
     }
 
+    /// Returns the slot of the current finalized checkpoint.
+    pub fn finalized_slot(&self) -> Slot {
+        self.canonical_head
+            .cached_head()
+            .finalized_checkpoint()
+            .epoch
+            .start_slot(T::EthSpec::slots_per_epoch())
+    }
+
     /// Returns a `Arc` of the `BeaconSnapshot` at the head of the canonical chain.
     ///
     /// See `Self::head` for more information.
