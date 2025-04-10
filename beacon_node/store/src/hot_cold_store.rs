@@ -6,10 +6,10 @@ use crate::historic_state_cache::HistoricStateCache;
 use crate::iter::{BlockRootsIterator, ParentRootBlockIterator, RootsIterator};
 use crate::memory_store::MemoryStore;
 use crate::metadata::{
-    AnchorInfo, BlobInfo, CompactionTimestamp, DataColumnInfo, SchemaVersion,
-    ANCHOR_FOR_ARCHIVE_NODE, ANCHOR_INFO_KEY, ANCHOR_UNINITIALIZED, BLOB_INFO_KEY,
-    COMPACTION_TIMESTAMP_KEY, CONFIG_KEY, CURRENT_SCHEMA_VERSION, DATA_COLUMN_INFO_KEY,
-    SCHEMA_VERSION_KEY, SPLIT_KEY, STATE_UPPER_LIMIT_NO_RETAIN,
+    AnchorInfo, BlobInfo, CompactionTimestamp, DataColumnInfo, SchemaVersion, ANCHOR_INFO_KEY,
+    ANCHOR_UNINITIALIZED, BLOB_INFO_KEY, COMPACTION_TIMESTAMP_KEY, CONFIG_KEY,
+    CURRENT_SCHEMA_VERSION, DATA_COLUMN_INFO_KEY, SCHEMA_VERSION_KEY, SPLIT_KEY,
+    STATE_UPPER_LIMIT_NO_RETAIN,
 };
 use crate::state_cache::{PutStateOutcome, StateCache};
 use crate::{
@@ -2536,17 +2536,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         } else {
             next_snapshot_slot
         };
-        let anchor_info = if state_upper_limit == 0 && anchor_slot == 0 {
-            // Genesis archive node: no anchor because we *will* store all states.
-            ANCHOR_FOR_ARCHIVE_NODE
-        } else {
-            AnchorInfo {
-                anchor_slot,
-                oldest_block_slot,
-                oldest_block_parent,
-                state_upper_limit,
-                state_lower_limit: self.spec.genesis_slot,
-            }
+        let anchor_info = AnchorInfo {
+            anchor_slot,
+            oldest_block_slot,
+            oldest_block_parent,
+            state_upper_limit,
+            state_lower_limit: self.spec.genesis_slot,
         };
         self.compare_and_set_anchor_info(ANCHOR_UNINITIALIZED, anchor_info)
     }

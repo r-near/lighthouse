@@ -3,9 +3,7 @@ use std::sync::Arc;
 use store::chunked_iter::ChunkedVectorIter;
 use store::{
     chunked_vector::BlockRootsChunked,
-    metadata::{
-        SchemaVersion, ANCHOR_FOR_ARCHIVE_NODE, ANCHOR_UNINITIALIZED, STATE_UPPER_LIMIT_NO_RETAIN,
-    },
+    metadata::{SchemaVersion, ANCHOR_UNINITIALIZED, STATE_UPPER_LIMIT_NO_RETAIN},
     partial_beacon_state::PartialBeaconState,
     AnchorInfo, DBColumn, Error, HotColdDB, KeyValueStore, KeyValueStoreOp,
 };
@@ -48,7 +46,13 @@ pub fn upgrade_to_v22<T: BeaconChainTypes>(
     // If the anchor was uninitialized in the old schema (`None`), this represents a full archive
     // node.
     let effective_anchor = if old_anchor == ANCHOR_UNINITIALIZED {
-        ANCHOR_FOR_ARCHIVE_NODE
+        AnchorInfo {
+            anchor_slot: Slot::new(0),
+            oldest_block_slot: Slot::new(0),
+            oldest_block_parent: Hash256::ZERO,
+            state_upper_limit: Slot::new(0),
+            state_lower_limit: Slot::new(0),
+        }
     } else {
         old_anchor.clone()
     };

@@ -247,7 +247,7 @@ impl StoreItem for OnDiskStoreConfig {
 mod test {
     use super::*;
     use crate::{
-        metadata::{ANCHOR_FOR_ARCHIVE_NODE, ANCHOR_UNINITIALIZED, STATE_UPPER_LIMIT_NO_RETAIN},
+        metadata::{ANCHOR_UNINITIALIZED, STATE_UPPER_LIMIT_NO_RETAIN},
         AnchorInfo, Split,
     };
     use ssz::DecodeError;
@@ -291,8 +291,15 @@ mod test {
             slot: Slot::new(32),
             ..Default::default()
         };
+        let anchor = AnchorInfo {
+            anchor_slot: Slot::new(0),
+            oldest_block_slot: Slot::new(0),
+            oldest_block_parent: Hash256::ZERO,
+            state_upper_limit: Slot::new(0),
+            state_lower_limit: Slot::new(0),
+        };
         assert!(store_config
-            .check_compatibility(&on_disk_config, &split, &ANCHOR_FOR_ARCHIVE_NODE)
+            .check_compatibility(&on_disk_config, &split, &anchor)
             .is_err());
     }
 

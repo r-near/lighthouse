@@ -22,15 +22,6 @@ pub const DATA_COLUMN_INFO_KEY: Hash256 = Hash256::repeat_byte(7);
 /// State upper limit value used to indicate that a node is not storing historic states.
 pub const STATE_UPPER_LIMIT_NO_RETAIN: Slot = Slot::new(u64::MAX);
 
-/// The `AnchorInfo` encoding full availability of all historic blocks & states.
-pub const ANCHOR_FOR_ARCHIVE_NODE: AnchorInfo = AnchorInfo {
-    anchor_slot: Slot::new(0),
-    oldest_block_slot: Slot::new(0),
-    oldest_block_parent: Hash256::ZERO,
-    state_upper_limit: Slot::new(0),
-    state_lower_limit: Slot::new(0),
-};
-
 /// The `AnchorInfo` encoding an uninitialized anchor.
 ///
 /// This value should never exist except on initial start-up prior to the anchor being initialised
@@ -152,6 +143,21 @@ impl AnchorInfo {
     /// Return true if no historic states other than genesis *will ever be stored*.
     pub fn full_state_pruning_enabled(&self) -> bool {
         self.state_lower_limit == 0 && self.state_upper_limit == STATE_UPPER_LIMIT_NO_RETAIN
+    }
+
+    /// Compute the correct `AnchorInfo` for an archive node created from the current node.
+    ///
+    /// This method ensures that the `anchor_slot` which is used for the hot database's diff grid is
+    /// preserved.
+    pub fn as_archive_anchor(&self) -> Self {
+        Self {
+            // Anchor slot MUST be the same. It is immutable.
+            anchor_slot: self.anchor_slot,
+            oldest_block_slot: Slot::new(0),
+            oldest_block_parent: Hash256::ZERO,
+            state_upper_limit: Slot::new(0),
+            state_lower_limit: Slot::new(0),
+        }
     }
 }
 
