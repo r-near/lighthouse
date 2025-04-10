@@ -566,6 +566,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // Because of the additional HDiffs kept for the grid prior to finalization the tree_roots
         // function will consider them roots. Those are expected. We just want to assert that the
         // relevant tree of states (post-split) is well-formed.
+        //
+        // This warning could also fire if we have imported a block that doesn't descend from the
+        // new finalized state, and has had its ancestor state summaries pruned by a previous
+        // run. See: https://github.com/sigp/lighthouse/issues/7270.
         if state_summaries_dag_roots_post_split.len() > 1 {
             warn!(
                 location = "pruning",
