@@ -19,7 +19,7 @@ use tracing::{debug, error, info_span, Instrument};
 use types::blob_sidecar::{BlobIdentifier, BlobSidecar, FixedBlobSidecarList};
 use types::{
     BlobSidecarList, ChainSpec, DataColumnIdentifier, DataColumnSidecar, DataColumnSidecarList,
-    Epoch, EthSpec, Hash256, RuntimeVariableList, SignedBeaconBlock,
+    Epoch, EthSpec, ForkName, Hash256, RuntimeVariableList, SignedBeaconBlock,
 };
 
 mod error;
@@ -495,7 +495,20 @@ impl<T: BeaconChainTypes> DataAvailabilityChecker<T> {
             fork_epoch,
             current_slot
                 .epoch(T::EthSpec::slots_per_epoch())
+                // TODO(das): use min_epochs_for_data_columns
                 .saturating_sub(self.spec.min_epochs_for_blob_sidecars_requests),
+        ))
+    }
+
+    pub fn oldest_epoch_with_data_columns(&self) -> Option<Epoch> {
+        let fulu_fork_epoch = self.spec.fork_epoch(ForkName::Fulu)?;
+        if fulu_fork_epoch == Epoch::max_value() {
+            return None;
+        }
+        let current_epoch = self.slot_clock.now()?.epoch(T::EthSpec::slots_per_epoch());
+        Some(std::cmp::max(
+            fulu_fork_epoch,
+            current_epoch.saturating_sub(self.spec.min_epochs_for_blob_sidecars_requests),
         ))
     }
 

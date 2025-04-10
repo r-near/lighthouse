@@ -931,8 +931,10 @@ impl<E: EthSpec> Network<E> {
                 warn!(%topic, error = ?e, "Failed to subscribe to topic");
                 false
             }
-            Ok(_) => {
-                debug!(%topic, "Subscribed to topic");
+            Ok(new_subscription) => {
+                if new_subscription {
+                    debug!(%topic, "Subscribed to topic");
+                }
                 true
             }
         }

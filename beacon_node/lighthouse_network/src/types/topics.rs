@@ -195,6 +195,27 @@ impl std::fmt::Display for GossipKind {
     }
 }
 
+impl GossipKind {
+    /// Returns the ForkName after which this GossipKind can form a valid topic
+    pub fn fork_activation(&self) -> ForkName {
+        match self {
+            Self::BeaconBlock => ForkName::Base,
+            Self::BeaconAggregateAndProof => ForkName::Base,
+            Self::BlobSidecar(_) => ForkName::Deneb,
+            Self::DataColumnSidecar(_) => ForkName::Fulu,
+            Self::Attestation(_) => ForkName::Base,
+            Self::VoluntaryExit => ForkName::Base,
+            Self::ProposerSlashing => ForkName::Base,
+            Self::AttesterSlashing => ForkName::Base,
+            Self::SignedContributionAndProof => ForkName::Altair,
+            Self::SyncCommitteeMessage(_) => ForkName::Altair,
+            Self::BlsToExecutionChange => ForkName::Capella,
+            Self::LightClientFinalityUpdate => ForkName::Altair,
+            Self::LightClientOptimisticUpdate => ForkName::Altair,
+        }
+    }
+}
+
 /// The known encoding types for gossipsub messages.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum GossipEncoding {

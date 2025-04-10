@@ -7,6 +7,7 @@ use crate::{Client, Enr, EnrExt, GossipTopic, Multiaddr, NetworkConfig, PeerId};
 use local_metadata::LocalMetadata;
 use parking_lot::RwLock;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 use types::data_column_custody_group::{
     compute_columns_from_custody_groups, compute_subnets_from_custody_groups, get_custody_groups,
@@ -141,6 +142,12 @@ impl<E: EthSpec> NetworkGlobals<E> {
         self.cgc_updates.read().at_slot(slot)
     }
 
+    /// Returns the minimum CGC value in the range of slots `range`. If the range is empty,
+    /// i.e. `3..1` returns the CGC value at `range.start`.
+    pub fn min_custody_group_count_at_range(&self, slot_range: Range<Slot>) -> u64 {
+        self.cgc_updates.read().min_at_slot_range(slot_range)
+    }
+
     /// Returns the count of custody columns this node must sample for block import
     pub fn custody_columns_count(&self, slot: Slot) -> u64 {
         // This only panics if the chain spec contains invalid values
@@ -162,6 +169,10 @@ impl<E: EthSpec> NetworkGlobals<E> {
 
     pub fn dump_cgc_updates(&self) -> CGCUpdates {
         self.cgc_updates.read().clone()
+    }
+
+    pub fn cgc_updates_len(&self) -> usize {
+        self.cgc_updates.read().len()
     }
 
     /// Returns the number of libp2p connected peers.

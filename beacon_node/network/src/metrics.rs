@@ -655,10 +655,34 @@ pub static CGC_ANNOUNCED: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
         "Current announced Custody Group Count CGC",
     )
 });
-pub static CGC_UPDATES: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
+pub static CGC_MIN_BACKFILL_RANGE: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_cgc_min_backfill_range",
+        "Current min CGC value in backfill range",
+    )
+});
+pub static CGC_FINALIZED_SLOT: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_cgc_finalized_slot",
+        "Current CGC value at the finalized slot",
+    )
+});
+pub static CGC_UPDATES_LENGTH: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "beacon_custody_cgc_updates_length",
+        "Current length of stored Custody Group Count CGC updates",
+    )
+});
+pub static CGC_UPDATE_EVENTS: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
     try_create_int_counter(
-        "beacon_custody_cgc_updates",
-        "Total count of Custody Group Count CGC updates",
+        "beacon_custody_cgc_update_events",
+        "Total count of the Custody Group Count CGC is updated",
+    )
+});
+pub static BACKFILL_RESTARTED_FOR_CGC: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
+    try_create_int_counter(
+        "beacon_custody_backfill_restarted_for_cgc",
+        "Total count of times backfill has restarted to backfill a higher CGC",
     )
 });
 

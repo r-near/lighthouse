@@ -14,10 +14,14 @@ pub struct CGCUpdates {
     updates: VariableList<CGCUpdate, ssz_types::typenum::U131072>,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl CGCUpdates {
-    pub fn new(initial_update: CGCUpdate) -> Self {
+    pub fn new(initial_cgc: u64) -> Self {
+        // The slot of the initial update doesn't matter. It's only relevant when pushing the next
+        // update if it has the same Slot. Otherwise, the result function `cgc(slot)` is independent
+        // of the value of initial_update.slot
         Self {
-            updates: VariableList::new(vec![initial_update]).expect("1 < 131072"),
+            updates: VariableList::new(vec![(Slot::new(0), initial_cgc)]).expect("1 < 131072"),
         }
     }
 
@@ -51,8 +55,8 @@ impl CGCUpdates {
     }
 
     /// Returns the ordered list of CGC values in the range of slots `range`. If the range is empty,
-    /// i.e. `slot..slot` returns the CGC value at `slot`. The return vector will never be empty.
-    pub fn at_slot_range(&self, range: Range<Slot>) -> Vec<u64> {
+    /// i.e. `3..1` returns the CGC value at `range.start`. The return vector will never be empty.
+    fn at_slot_range(&self, range: Range<Slot>) -> Vec<u64> {
         let first_update_index = self.update_index_at_slot(range.start);
 
         let cgcs = self
@@ -73,6 +77,16 @@ impl CGCUpdates {
         } else {
             cgcs
         }
+    }
+
+    /// Returns the minimum CGC value in the range of slots `range`. If the range is empty,
+    /// i.e. `slot..slot` returns the CGC value at `slot`.
+    pub fn min_at_slot_range(&self, range: Range<Slot>) -> u64 {
+        *self
+            .at_slot_range(range)
+            .iter()
+            .min()
+            .expect("at_slot_range never returns empty Vec")
     }
 
     pub fn add_latest_update(&mut self, update: CGCUpdate) -> Result<(), String> {
@@ -119,6 +133,10 @@ impl CGCUpdates {
     pub fn iter(&self) -> impl Iterator<Item = CGCUpdate> + '_ {
         self.updates.iter().copied()
     }
+
+    pub fn len(&self) -> usize {
+        self.updates.len()
+    }
 }
 
 #[cfg(test)]
@@ -126,8 +144,8 @@ mod tests {
     use super::*;
 
     fn new(updates: &[(u64, u64)]) -> CGCUpdates {
-        let first_update = *updates.get(0).expect("should have at least one update");
-        let mut u = CGCUpdates::new(to(first_update));
+        let first_update = *updates.first().expect("should have at least one update");
+        let mut u = CGCUpdates::new(first_update.1);
         for update in updates.iter().skip(1) {
             u.add_latest_update(to(*update)).unwrap();
         }
