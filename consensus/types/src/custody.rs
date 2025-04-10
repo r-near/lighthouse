@@ -34,6 +34,10 @@ impl CGCUpdates {
             .map_err(|e| format!("Updates list full: {e:?}"))
     }
 
+    pub fn prune_updates_older_than(&mut self, slot: Slot) {
+        todo!("{slot}");
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (Slot, u64)> + '_ {
         std::iter::once((Slot::new(0), self.initial_value)).chain(self.updates.iter().copied())
     }

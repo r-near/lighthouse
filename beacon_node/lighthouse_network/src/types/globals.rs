@@ -156,6 +156,10 @@ impl<E: EthSpec> NetworkGlobals<E> {
             .add_latest_update((update_start_slot, cgc))
     }
 
+    pub fn prune_cgc_updates_older_than(&self, slot: Slot) {
+        self.cgc_updates.write().prune_updates_older_than(slot);
+    }
+
     pub fn dump_cgc_updates(&self) -> CGCUpdates {
         self.cgc_updates.read().clone()
     }

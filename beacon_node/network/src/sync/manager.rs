@@ -177,6 +177,9 @@ pub enum SyncMessage<E: EthSpec> {
 
     /// A block from gossip has completed processing,
     GossipBlockProcessResult { block_root: Hash256, imported: bool },
+
+    /// Network service asks backfill sync to restart after increasing the oldest_block_slot
+    BackfillSyncRestart(Slot),
 }
 
 /// The type of processing specified for a received block.
@@ -894,6 +897,13 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                         .on_sample_verified(id, result, &mut self.network)
                 {
                     self.on_sampling_result(requester, result)
+                }
+            }
+            SyncMessage::BackfillSyncRestart(slot) => {
+                if let Err(e) = self.backfill_sync.restart(&mut self.network) {
+                    error!(error = ?e, "Error on backfill sync restart");
+                } else {
+                    debug!(%slot, "Received backfill sync restart event");
                 }
             }
         }

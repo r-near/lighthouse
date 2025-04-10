@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 use tokio::time::Sleep;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 use types::{
-    ChainSpec, Epoch, EthSpec, ForkContext, Slot, SubnetId, SyncCommitteeSubscription,
+    ChainSpec, Epoch, EthSpec, ForkContext, ForkName, Slot, SubnetId, SyncCommitteeSubscription,
     SyncSubnetId, Unsigned, ValidatorSubscription,
 };
 
@@ -850,6 +850,14 @@ impl<T: BeaconChainTypes> NetworkService<T> {
     }
 
     fn on_cgc_update_interval(&mut self) {
+        // Skip running this function if Fulu is not scheduled. But run it before the fork to start
+        // announcing the CGC ahead of the fork.
+        let fulu_fork_epoch = match self.beacon_chain.spec.fork_epoch(ForkName::Fulu) {
+            None => return,
+            Some(epoch) if epoch == Epoch::max_value() => return,
+            Some(epoch) => epoch,
+        };
+
         let prev_cgc = self.network_globals.custody_group_count(Slot::max_value());
         let Ok(clock_epoch) = self.beacon_chain.epoch() else {
             return;
@@ -973,33 +981,47 @@ impl<T: BeaconChainTypes> NetworkService<T> {
         //                   with CGC 128
         //
         let oldest_block_slot = self.beacon_chain.store.get_anchor_info().oldest_block_slot;
+        // TODO(das): use min_epochs_for_data_columns
+        let last_pruned_epoch = clock_epoch.saturating_sub(Epoch::new(
+            self.beacon_chain.spec.min_epochs_for_blob_sidecars_requests,
+        ));
+        let last_pruned_slot = last_pruned_epoch.start_slot(T::EthSpec::slots_per_epoch());
+        let fulu_fork_slot = fulu_fork_epoch.start_slot(T::EthSpec::slots_per_epoch());
+        let oldest_relevant_slot = std::cmp::max(
+            oldest_block_slot,
+            std::cmp::max(last_pruned_slot, fulu_fork_slot),
+        );
+
         let finalized_slot = self.beacon_chain.finalized_slot();
-        let cgc_at_oldest_block_slot = self.network_globals.custody_group_count(oldest_block_slot);
+
+        let cgc_at_oldest_relevant_slot = self
+            .network_globals
+            .custody_group_count(oldest_relevant_slot);
         let cgc_at_finalized_slot = self.network_globals.custody_group_count(finalized_slot);
+
+        let backfill_started_recently =
+            finalized_slot.saturating_sub(oldest_block_slot) < MAX_SLOT_DISTANCE_BACKFILL_RESTART;
+        let backfill_finished = oldest_block_slot == Slot::new(0);
+
         // TODO(das): If we support a decreasing CGC we must consider the min value between this two
         // slots.
-        if cgc_at_oldest_block_slot < cgc_at_finalized_slot {
-            let backfill_started_recently = finalized_slot.saturating_sub(oldest_block_slot)
-                < MAX_SLOT_DISTANCE_BACKFILL_RESTART;
-            // Note: we don't check if backfill finished. If it did because we are close to genesis,
-            // we want to restart it anyway to backfill with the CGC. The only condition to NOT
-            // restart is if backfill went too far and thus we would waste too much bandwidth
-            // fetching the blocks again.
-            if backfill_started_recently {
-                // We need backfill sync to fetch batches with `CGC_f = cgc_at_finalized_slot`. Then
-                // `custody_group_count(oldest_block_slot) should now return `CGC_f`. So we have to
-                // delete the CGC updates with `update.slot < finalized_slot`
-                todo!();
-            }
+        //
+        // Skip if backfill has finished. State reconstruction may have already started and we could
+        // mess with the DB. For real networks Fulu fork is way ahead of genesis so it won't affect
+        if cgc_at_oldest_relevant_slot < cgc_at_finalized_slot
+            && backfill_started_recently
+            && !backfill_finished
+        {
+            // We need backfill sync to fetch batches with `CGC_f = cgc_at_finalized_slot`. Then
+            // `custody_group_count(oldest_block_slot) should now return `CGC_f`. So we have to
+            // delete the CGC updates with `update.slot < finalized_slot`
+            self.network_globals
+                .prune_cgc_updates_older_than(finalized_slot);
+            self.send_to_router(RouterMessage::BackfillSyncRestart(finalized_slot));
         }
 
         // Schedule an advertise CGC update for later
-        // TODO(das): use min_epochs_for_data_columns
-        let last_pruned_epoch =
-            clock_epoch - Epoch::new(self.beacon_chain.spec.min_epochs_for_blob_sidecars_requests);
-        let cgc_to_announce = self
-            .network_globals
-            .custody_group_count(last_pruned_epoch.start_slot(T::EthSpec::slots_per_epoch()));
+        let cgc_to_announce = cgc_at_oldest_relevant_slot;
 
         // update_enr_cgc updates the NetworkGlobals ENR
         match self.libp2p.update_enr_cgc(cgc_to_announce) {

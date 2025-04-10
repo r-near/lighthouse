@@ -208,6 +208,37 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         }
     }
 
+    /// Restarts backfill backfill sync clearing its state
+    #[must_use = "A failure here indicates the backfill sync has failed and the global sync state should be updated"]
+    #[instrument(parent = None,
+        level = "info",
+        fields(service = "backfill_sync"),
+        name = "backfill_sync",
+        skip_all
+    )]
+    pub fn restart(
+        &mut self,
+        network: &mut SyncNetworkContext<T>,
+    ) -> Result<SyncStart, BackFillError> {
+        match self.state() {
+            // Reset and start again
+            BackFillState::Syncing => {
+                self.reset_sync();
+                self.set_state(BackFillState::Paused);
+                self.start(network)
+            }
+            // Reset, but keep paused
+            BackFillState::Paused => {
+                self.reset_sync();
+                Ok(SyncStart::NotSyncing)
+            }
+            // Ignore a restart if completed
+            BackFillState::Completed => Ok(SyncStart::NotSyncing),
+            // Already reset, no need to do anything
+            BackFillState::Failed => Ok(SyncStart::NotSyncing),
+        }
+    }
+
     /// Starts or resumes syncing.
     ///
     /// If resuming is successful, reports back the current syncing metrics.
@@ -486,6 +517,24 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
 
         // Set the state
         self.set_state(BackFillState::Failed);
+        self.reset_sync();
+
+        // Emit the log here
+        error!(?error, "Backfill sync failed");
+
+        // Return the error, kinda weird pattern, but I want to use
+        // `self.fail_chain(_)?` in other parts of the code.
+        Err(error)
+    }
+
+    /// This resets past variables, to allow for a fresh start when resuming.
+    #[instrument(parent = None,
+        level = "info",
+        fields(service = "backfill_sync"),
+        name = "backfill_sync",
+        skip_all
+    )]
+    fn reset_sync(&mut self) {
         // Remove all batches and active requests and participating peers.
         self.batches.clear();
         self.active_requests.clear();
@@ -499,13 +548,6 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         self.current_processing_batch = None;
 
         // NOTE: Lets keep validated_batches for posterity
-
-        // Emit the log here
-        error!(?error, "Backfill sync failed");
-
-        // Return the error, kinda weird pattern, but I want to use
-        // `self.fail_chain(_)?` in other parts of the code.
-        Err(error)
     }
 
     /// Processes the batch with the given id.
