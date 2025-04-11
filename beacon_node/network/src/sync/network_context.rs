@@ -372,11 +372,11 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             );
 
             let request = RequestType::Status(status_message.clone());
-            let request_id = AppRequestId::Router;
+            let app_request_id = AppRequestId::Router;
             let _ = self.send_network_msg(NetworkMessage::SendRequest {
                 peer_id,
                 request,
-                request_id,
+                app_request_id,
             });
         }
     }
@@ -596,7 +596,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .send(NetworkMessage::SendRequest {
                 peer_id,
                 request: RequestType::BlocksByRoot(request.into_request(&self.fork_context)),
-                request_id: AppRequestId::Sync(SyncRequestId::SingleBlock { id }),
+                app_request_id: AppRequestId::Sync(SyncRequestId::SingleBlock { id }),
             })
             .map_err(|_| RpcRequestSendError::NetworkSendError)?;
 
@@ -685,7 +685,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .send(NetworkMessage::SendRequest {
                 peer_id,
                 request: RequestType::BlobsByRoot(request.clone().into_request(&self.fork_context)),
-                request_id: AppRequestId::Sync(SyncRequestId::SingleBlob { id }),
+                app_request_id: AppRequestId::Sync(SyncRequestId::SingleBlob { id }),
             })
             .map_err(|_| RpcRequestSendError::NetworkSendError)?;
 
@@ -734,7 +734,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         self.send_network_msg(NetworkMessage::SendRequest {
             peer_id,
             request: RequestType::DataColumnsByRoot(request.clone().into_request(&self.chain.spec)),
-            request_id: AppRequestId::Sync(SyncRequestId::DataColumnsByRoot(id)),
+            app_request_id: AppRequestId::Sync(SyncRequestId::DataColumnsByRoot(id)),
         })?;
 
         debug!(
@@ -841,7 +841,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .send(NetworkMessage::SendRequest {
                 peer_id,
                 request: RequestType::BlocksByRange(request.clone().into()),
-                request_id: AppRequestId::Sync(SyncRequestId::BlocksByRange(id)),
+                app_request_id: AppRequestId::Sync(SyncRequestId::BlocksByRange(id)),
             })
             .map_err(|_| RpcRequestSendError::NetworkSendError)?;
 
@@ -882,7 +882,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .send(NetworkMessage::SendRequest {
                 peer_id,
                 request: RequestType::BlobsByRange(request.clone()),
-                request_id: AppRequestId::Sync(SyncRequestId::BlobsByRange(id)),
+                app_request_id: AppRequestId::Sync(SyncRequestId::BlobsByRange(id)),
             })
             .map_err(|_| RpcRequestSendError::NetworkSendError)?;
 
@@ -921,7 +921,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         self.send_network_msg(NetworkMessage::SendRequest {
             peer_id,
             request: RequestType::DataColumnsByRange(request.clone()),
-            request_id: AppRequestId::Sync(SyncRequestId::DataColumnsByRange(id)),
+            app_request_id: AppRequestId::Sync(SyncRequestId::DataColumnsByRange(id)),
         })
         .map_err(|_| RpcRequestSendError::NetworkSendError)?;
 
