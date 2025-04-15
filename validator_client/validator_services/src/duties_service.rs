@@ -126,11 +126,11 @@ pub struct SubscriptionSlots {
     duty_slot: Slot,
 }
 
-struct SelectionProofConfig {
-    lookahead_slot: u64,
-    computation_offset: Duration, // The seconds to compute the selection proof before a slot
-    selections_endpoint: bool,
-    parallel_sign: bool,
+pub struct SelectionProofConfig {
+    pub lookahead_slot: u64,
+    pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
+    pub selections_endpoint: bool,
+    pub parallel_sign: bool,
 }
 
 /// Create a selection proof for `duty`.
