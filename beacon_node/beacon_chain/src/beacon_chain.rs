@@ -120,7 +120,7 @@ use std::time::Duration;
 use store::iter::{BlockRootsIterator, ParentRootBlockIterator, StateRootsIterator};
 use store::{
     BlobSidecarListFromRoot, DatabaseBlock, Error as DBError, HotColdDB, HotStateSummary,
-    KeyValueStore, KeyValueStoreOp, StoreItem, StoreOp,
+    KeyValueStoreOp, StoreItem, StoreOp,
 };
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio_stream::Stream;
@@ -3968,8 +3968,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
         ops.push(StoreOp::PutState(block.state_root(), &state));
 
-        let txn_lock = self.store.hot_db.begin_rw_transaction();
-
         if let Err(e) = self.store.do_atomically_with_block_and_blobs_cache(ops) {
             error!(
                 msg = "Restoring fork choice from disk",
@@ -3981,7 +3979,6 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 .err()
                 .unwrap_or(e.into()));
         }
-        drop(txn_lock);
 
         // The fork choice write-lock is dropped *after* the on-disk database has been updated.
         // This prevents inconsistency between the two at the expense of concurrency.
