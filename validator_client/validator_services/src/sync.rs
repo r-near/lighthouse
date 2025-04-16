@@ -1,4 +1,5 @@
 use crate::duties_service::{DutiesService, Error, SelectionProofConfig};
+use beacon_node_fallback::BeaconNodeFallback;
 use doppelganger_service::DoppelgangerStatus;
 use eth2::types::{Signature, SyncCommitteeSelection};
 use futures::future::join_all;
@@ -10,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, PublicKeyBytes, Slot, SyncDuty, SyncSelectionProof, SyncSubnetId};
 use validator_store::Error as ValidatorStoreError;
 
@@ -517,6 +518,105 @@ pub async fn poll_sync_committee_duties_for_period<T: SlotClock + 'static, E: Et
     }
 
     Ok(())
+}
+
+pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
+    duties_service: &Arc<DutiesService<T, E>>,
+    duty: &SyncDuty,
+    proof_slot: Slot,
+    subnet_id: SyncSubnetId,
+    config: &SelectionProofConfig,
+    _beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
+) -> Option<SyncSelectionProof> {
+    let sync_selection_proof = duties_service
+        .validator_store
+        .produce_sync_selection_proof(&duty.pubkey, proof_slot, subnet_id)
+        .await;
+
+    let selection_proof = match sync_selection_proof {
+        Ok(proof) => proof,
+        Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
+            // A pubkey can be missing when a validator was recently removed via the API
+            debug!(
+            ?pubkey,
+            "slot" = %proof_slot,
+            "Missing pubkey for sync selection proof");
+            return None;
+        }
+        Err(e) => {
+            warn!(
+                "error" = ?e,
+                "pubkey" = ?duty.pubkey,
+                "slot" = %proof_slot,
+                "Unable to sign selection proof"
+            );
+            return None;
+        }
+    };
+
+    // In --distributed mode when we want to call the selections endpoint
+    if config.selections_endpoint {
+        debug!(
+            "validator_index" = duty.validator_index,
+            "slot" = %proof_slot,
+            "subcommittee_index" = *subnet_id,
+            "partial selection proof" = ?Signature::from(selection_proof.clone()),
+            "Created sync selection proof"
+        );
+
+        let sync_committee_selection = SyncCommitteeSelection {
+            validator_index: duty.validator_index,
+            slot: proof_slot,
+            subcommittee_index: *subnet_id,
+            selection_proof: selection_proof.clone().into(),
+        };
+
+        // Call the endpoint /eth/v1/validator/sync_committee_selections
+        // by sending the SyncCommitteeSelection that contains partial sync selection proof
+        // The middleware should return SyncCommitteeSelection that contains full sync selection proof
+        let middleware_response = duties_service
+            .beacon_nodes
+            .first_success(|beacon_node| {
+                let selection_data = sync_committee_selection.clone();
+                async move {
+                    beacon_node
+                        .post_validator_sync_committee_selections(&[selection_data])
+                        .await
+                }
+            })
+            .await;
+
+        match middleware_response {
+            Ok(response) => {
+                // Process each middleware response
+                let response_data = &response.data[0];
+                // The selection proof from middleware response will be a full selection proof
+                debug!(
+                    "validator_index" = response_data.validator_index,
+                    "slot" = %response_data.slot,
+                    "subcommittee_index" = response_data.subcommittee_index,
+                    "full selection proof" = ?response_data.selection_proof,
+                    "Received sync selection from middleware"
+                );
+
+                // Convert the response to a SyncSelectionProof so we can call the is_aggregator method
+                let selection_proof =
+                    SyncSelectionProof::from(response_data.selection_proof.clone());
+                Some(selection_proof)
+            }
+            Err(e) => {
+                error!(
+                    "error" = %e,
+                    %proof_slot,
+                    "Failed to get sync selection proofs from middleware"
+                );
+                None
+            }
+        }
+    } else {
+        // When calling the selections endpoint is not required, return the selection_proof
+        Some(selection_proof)
+    }
 }
 
 pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
