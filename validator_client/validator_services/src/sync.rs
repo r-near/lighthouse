@@ -672,13 +672,13 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                 "Selection proof in result variable"
                             );
                         }
-                        result.map(|proof| (duty.validator_index, slot, subnet_id, proof))
+                        result.map(|proof| (duty.validator_index, proof_slot, subnet_id, proof))
                     });
                 }
             }
 
             while let Some(result) = futures_unordered.next().await {
-                if let Some((validator_index, slot, subnet_id, proof)) = result {
+                if let Some((validator_index, proof_slot, subnet_id, proof)) = result {
                     let sync_map = duties_service.sync_duties.committees.read();
                     let Some(committee_duties) = sync_map.get(&sync_committee_period) else {
                         debug!("period" = sync_committee_period, "Missing sync duties");
@@ -693,7 +693,7 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                             if let Some(Some(duty)) = validators.get(&validator_index) {
                                 debug!(
                                     validator_index,
-                                    "slot" = %slot,
+                                    "slot" = %proof_slot,
                                     "subcommittee_index" = *subnet_id,
                                     // log full selection proof for debugging
                                     "full selection proof" = ?proof,

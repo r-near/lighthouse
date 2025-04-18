@@ -380,11 +380,20 @@ impl<T: SlotClock + 'static, E: EthSpec> SyncCommitteeService<T, E> {
                         aggregator_index,
                         aggregator_pk,
                         contribution.clone(),
-                        selection_proof,
+                        selection_proof.clone(),
                     )
                     .await
                 {
-                    Ok(signed_contribution) => Some(signed_contribution),
+                    Ok(signed_contribution) => {
+                        debug!(
+                            validator_index = aggregator_index,
+                            %slot,
+                            subcommittee_index = %subnet_id,
+                            full_selection_proof = ?selection_proof,
+                            "Produced sync contribution and proof"
+                        );
+                        Some(signed_contribution)
+                    }
                     Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
                         // A pubkey can be missing when a validator was recently
                         // removed via the API.
