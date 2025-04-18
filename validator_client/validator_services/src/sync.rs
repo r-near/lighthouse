@@ -599,9 +599,9 @@ pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
                 );
 
                 // Convert the response to a SyncSelectionProof so we can call the is_aggregator method
-                let selection_proof =
+                let full_selection_proof =
                     SyncSelectionProof::from(response_data.selection_proof.clone());
-                Some(selection_proof)
+                Some(full_selection_proof)
             }
             Err(e) => {
                 error!(
@@ -663,12 +663,20 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                         )
                         .await;
 
+                        if let Some(proof) = &result {
+                            debug!(
+                                validator_index = duty.validator_index,
+                                "slot" = %proof_slot,
+                                "subcommittee_index" = *subnet_id,
+                                "full selection proof" = ?proof,
+                                "Selection proof in result variable"
+                            );
+                        }
                         result.map(|proof| (duty.validator_index, slot, subnet_id, proof))
                     });
                 }
             }
 
-            // let mut successful_results = Vec::new();
             while let Some(result) = futures_unordered.next().await {
                 if let Some((validator_index, slot, subnet_id, proof)) = result {
                     let sync_map = duties_service.sync_duties.committees.read();
@@ -697,7 +705,6 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                                     .proofs
                                     .write()
                                     .insert((slot, subnet_id), proof);
-                                //successful_results.push(validator_index);
                             }
                         }
                         Ok(false) => {} // Not an aggregator
