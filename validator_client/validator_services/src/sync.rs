@@ -357,8 +357,8 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
                         .sync_duties
                         .aggregation_pre_compute_slots(),
                     computation_offset: Duration::from_secs(0),
-                    selections_endpoint: sub_duties_service.distributed,
-                    parallel_sign: sub_duties_service.distributed,
+                    selections_endpoint: sub_duties_service.sync_duties.distributed,
+                    parallel_sign: sub_duties_service.sync_duties.distributed,
                 };
 
                 fill_in_aggregation_proofs(
