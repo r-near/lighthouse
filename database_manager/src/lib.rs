@@ -1,4 +1,5 @@
 pub mod cli;
+
 use crate::cli::DatabaseManager;
 use crate::cli::Migrate;
 use crate::cli::PruneStates;
@@ -12,21 +13,18 @@ use clap::ValueEnum;
 use cli::{Compact, Inspect};
 use environment::{Environment, RuntimeContext};
 use serde::{Deserialize, Serialize};
-use ssz::Decode;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use store::metadata::STATE_UPPER_LIMIT_NO_RETAIN;
-use store::KeyValueStore;
 use store::{
     database::interface::BeaconNodeBackend,
     errors::Error,
     hot_cold_store::HotColdDBError,
     metadata::{SchemaVersion, CURRENT_SCHEMA_VERSION},
-    DBColumn, HotColdDB, KeyValueStore, KeyValueStoreOp, LevelDB,
+    BlobSidecarListFromRoot, DBColumn, HotColdDB, KeyValueStore, KeyValueStoreOp,
 };
 use strum::{EnumString, EnumVariantNames};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use types::{BeaconState, BlobSidecarList, EthSpec, Hash256, Slot};
 
 fn parse_client_config<E: EthSpec>(
@@ -461,21 +459,19 @@ fn set_oldest_blob_slot<E: EthSpec>(
     slot: Slot,
     client_config: ClientConfig,
     runtime_context: &RuntimeContext<E>,
-    log: Logger,
 ) -> Result<(), Error> {
     let spec = &runtime_context.eth2_config.spec;
     let hot_path = client_config.get_db_path();
     let cold_path = client_config.get_freezer_db_path();
     let blobs_path = client_config.get_blobs_db_path();
 
-    let db = HotColdDB::<E, LevelDB<E>, LevelDB<E>>::open(
+    let db = HotColdDB::<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>>::open(
         &hot_path,
         &cold_path,
         &blobs_path,
         |_, _, _| Ok(()),
         client_config.store,
         spec.clone(),
-        log.clone(),
     )?;
 
     let old_blob_info = db.get_blob_info();
@@ -483,10 +479,9 @@ fn set_oldest_blob_slot<E: EthSpec>(
     new_blob_info.oldest_blob_slot = Some(slot);
 
     info!(
-        log,
-        "Updating oldest blob slot";
-        "previous" => ?old_blob_info.oldest_blob_slot,
-        "new" => slot,
+        previous = ?old_blob_info.oldest_blob_slot,
+        new = ?slot,
+        "Updating oldest blob slot"
     );
 
     db.compare_and_set_blob_info_with_write(old_blob_info, new_blob_info)
@@ -496,21 +491,19 @@ fn inspect_blobs<E: EthSpec>(
     _verify: bool,
     client_config: ClientConfig,
     runtime_context: &RuntimeContext<E>,
-    log: Logger,
 ) -> Result<(), Error> {
     let spec = &runtime_context.eth2_config.spec;
     let hot_path = client_config.get_db_path();
     let cold_path = client_config.get_freezer_db_path();
     let blobs_path = client_config.get_blobs_db_path();
 
-    let db = HotColdDB::<E, LevelDB<E>, LevelDB<E>>::open(
+    let db = HotColdDB::<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>>::open(
         &hot_path,
         &cold_path,
         &blobs_path,
         |_, _, _| Ok(()),
         client_config.store,
         spec.clone(),
-        log.clone(),
     )?;
 
     let split = db.get_split_info();
@@ -522,32 +515,26 @@ fn inspect_blobs<E: EthSpec>(
 
     if oldest_block_slot > deneb_start_slot {
         info!(
-            log,
-            "Missing blobs AND blocks";
-            "start" => deneb_start_slot,
-            "end" => oldest_block_slot - 1,
+            start = %deneb_start_slot,
+            end = %(oldest_block_slot - 1),
+            "Missing blobs AND blocks"
         );
     }
 
     let mut last_block_root = Hash256::ZERO;
 
-    for res in db.forwards_block_roots_iterator_until(
-        start_slot,
-        split.slot,
-        || {
-            db.get_advanced_hot_state(split.block_root, split.slot, split.state_root)?
-                .ok_or(HotColdDBError::MissingSplitState(split.state_root, split.slot).into())
-                .map(|(_, split_state)| (split_state, split.block_root))
-        },
-        spec,
-    )? {
+    for res in db.forwards_block_roots_iterator_until(start_slot, split.slot, || {
+        db.get_advanced_hot_state(split.block_root, split.slot, split.state_root)?
+            .ok_or(HotColdDBError::MissingSplitState(split.state_root, split.slot).into())
+            .map(|(_, split_state)| (split_state, split.block_root))
+    })? {
         let (block_root, slot) = res?;
 
         if last_block_root == block_root {
-            info!(log, "Slot {}: no block", slot);
-        } else if let Some(blobs) = db.get_blobs(&block_root)? {
+            info!("Slot {}: no block", slot);
+        } else if let BlobSidecarListFromRoot::Blobs(blobs) = db.get_blobs(&block_root)? {
             // FIXME(sproul): do verification here
-            info!(log, "Slot {}: {} blobs stored", slot, blobs.len());
+            info!("Slot {}: {} blobs stored", slot, blobs.len());
         } else {
             // Check whether blobs are expected.
             let block = db
@@ -561,11 +548,11 @@ fn inspect_blobs<E: EthSpec>(
                 .map_or(0, |blobs| blobs.len());
             if num_expected_blobs > 0 {
                 warn!(
-                    log,
-                    "Slot {}: {} blobs missing ({:?})", slot, num_expected_blobs, block_root
+                    "Slot {}: {} blobs missing ({:?})",
+                    slot, num_expected_blobs, block_root
                 );
             } else {
-                info!(log, "Slot {}: block with 0 blobs", slot);
+                info!("Slot {}: block with 0 blobs", slot);
             }
         }
         last_block_root = block_root;
@@ -578,24 +565,22 @@ fn import_blobs<E: EthSpec>(
     source_path: &Path,
     client_config: ClientConfig,
     runtime_context: &RuntimeContext<E>,
-    log: Logger,
 ) -> Result<(), Error> {
     let spec = &runtime_context.eth2_config.spec;
     let hot_path = client_config.get_db_path();
     let cold_path = client_config.get_freezer_db_path();
     let blobs_path = client_config.get_blobs_db_path();
 
-    let db = HotColdDB::<E, LevelDB<E>, LevelDB<E>>::open(
+    let db = HotColdDB::<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>>::open(
         &hot_path,
         &cold_path,
         &blobs_path,
         |_, _, _| Ok(()),
-        client_config.store,
+        client_config.store.clone(),
         spec.clone(),
-        log.clone(),
     )?;
 
-    let source_db = LevelDB::<E>::open(source_path)?;
+    let source_db = BeaconNodeBackend::<E>::open(&client_config.store, source_path)?;
 
     let prev_blob_info = db.get_blob_info();
     let mut oldest_blob_slot = prev_blob_info
@@ -611,23 +596,20 @@ fn import_blobs<E: EthSpec>(
     for res in source_db.iter_column(DBColumn::BeaconBlob) {
         let (block_root, blob_bytes) = res?;
 
-        if db.get_blobs(&block_root)?.is_some() {
+        if db.get_blobs(&block_root)?.len() > 0 {
             num_already_known += 1;
         } else {
-            let blobs = BlobSidecarList::<E>::from_ssz_bytes(&blob_bytes)?;
+            // FIXME(sproul): max len?
+            let blobs = BlobSidecarList::<E>::from_ssz_bytes(&blob_bytes, 64)?;
             ops.push(KeyValueStoreOp::PutKeyValue(
-                store::get_key_for_col(DBColumn::BeaconBlob.as_str(), block_root.as_slice()),
+                DBColumn::BeaconBlob,
+                block_root.to_vec(),
                 blob_bytes,
             ));
 
             if let Some(blob) = blobs.first() {
                 oldest_blob_slot = oldest_blob_slot.min(blob.slot());
-                debug!(
-                    log,
-                    "Imported blobs for slot {} ({:?})",
-                    blob.slot(),
-                    block_root
-                );
+                debug!("Imported blobs for slot {} ({:?})", blob.slot(), block_root);
             }
             num_imported += 1;
 
@@ -643,10 +625,9 @@ fn import_blobs<E: EthSpec>(
     db.compare_and_set_blob_info_with_write(prev_blob_info, new_blob_info)?;
 
     info!(
-        log,
-        "Blobs imported";
-        "imported" => num_imported,
-        "already_known" => num_already_known
+        imported = num_imported,
+        already_known = num_already_known,
+        "Blobs imported"
     );
 
     Ok(())
@@ -711,14 +692,13 @@ pub fn run<E: EthSpec>(
             compact_db::<E>(compact_config, client_config).map_err(format_err)
         }
         cli::DatabaseManagerSubcommand::SetOldestBlobSlot(blob_slot_config) => {
-            set_oldest_blob_slot(blob_slot_config.slot, client_config, &context, log)
-                .map_err(format_err)
+            set_oldest_blob_slot(blob_slot_config.slot, client_config, &context).map_err(format_err)
         }
         cli::DatabaseManagerSubcommand::InspectBlobs(_) => {
-            inspect_blobs(false, client_config, &context, log).map_err(format_err)
+            inspect_blobs(false, client_config, &context).map_err(format_err)
         }
         cli::DatabaseManagerSubcommand::ImportBlobs(config) => {
-            import_blobs(&config.source_db, client_config, &context, log).map_err(format_err)
+            import_blobs(&config.source_db, client_config, &context).map_err(format_err)
         }
     }
 }
