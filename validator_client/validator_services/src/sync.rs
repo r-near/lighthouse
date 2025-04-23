@@ -651,11 +651,10 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
                 // Store all partial sync selection proofs so that it can be sent together later
                 for &subnet_id in &subnet_ids {
                     let duties_service = duties_service.clone();
-                    let duty = duty.clone();
                     futures_unordered.push(async move {
                         let result = make_sync_selection_proof(
                             &duties_service,
-                            &duty,
+                            duty,
                             proof_slot,
                             subnet_id,
                             config_ref,
@@ -748,58 +747,45 @@ pub async fn fill_in_aggregation_proofs<T: SlotClock + 'static, E: EthSpec>(
 
                 // Create futures to produce proofs.
                 let duties_service_ref = &duties_service;
+                let config_ref = &config;
                 let futures = subnet_ids.iter().map(|subnet_id| async move {
                     // Construct proof for prior slot.
                     let proof_slot = slot - 1;
 
-                    let proof = match duties_service_ref
-                        .validator_store
-                        .produce_sync_selection_proof(&duty.pubkey, proof_slot, *subnet_id)
-                        .await
-                    {
-                        Ok(proof) => proof,
-                        Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
-                            // A pubkey can be missing when a validator was recently
-                            // removed via the API.
-                            debug!(
-                                ?pubkey,
-                                pubkey = ?duty.pubkey,
-                                slot = %proof_slot,
-                                "Missing pubkey for sync selection proof"
-                            );
-                            return None;
-                        }
-                        Err(e) => {
-                            warn!(
-                                error = ?e,
-                                pubkey = ?duty.pubkey,
-                                slot = %proof_slot,
-                                "Unable to sign selection proof"
-                            );
-                            return None;
-                        }
-                    };
+                    let proof = make_sync_selection_proof(
+                        duties_service_ref,
+                        duty,
+                        proof_slot,
+                        *subnet_id,
+                        config_ref,
+                        &duties_service_ref.beacon_nodes,
+                    )
+                    .await;
 
-                    match proof.is_aggregator::<E>() {
-                        Ok(true) => {
-                            debug!(
-                                validator_index = duty.validator_index,
-                                slot = %proof_slot,
-                                %subnet_id,
-                                "Validator is sync aggregator"
-                            );
-                            Some(((proof_slot, *subnet_id), proof))
-                        }
-                        Ok(false) => None,
-                        Err(e) => {
-                            warn!(
-                                pubkey = ?duty.pubkey,
-                                slot = %proof_slot,
-                                error = ?e,
-                                "Error determining is_aggregator"
-                            );
-                            None
-                        }
+                    match proof {
+                        Some(proof) => match proof.is_aggregator::<E>() {
+                            Ok(true) => {
+                                debug!(
+                                    validator_index = duty.validator_index,
+                                    slot = %proof_slot,
+                                    %subnet_id,
+                                    "Validator is sync aggregator"
+                                );
+                                Some(((proof_slot, *subnet_id), proof))
+                            }
+                            Ok(false) => None,
+                            Err(e) => {
+                                warn!(
+                                    pubkey = ?duty.pubkey,
+                                    slot = %proof_slot,
+                                    error = ?e,
+                                    "Error determining is_aggregator"
+                                );
+                                None
+                            }
+                        },
+
+                        None => None,
                     }
                 });
 
