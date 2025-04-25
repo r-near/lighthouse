@@ -1,17 +1,19 @@
-use crate::{DutiesService, ProductionValidatorClient};
-use metrics::set_gauge;
+use crate::duties_service::DutiesService;
 use slot_clock::SlotClock;
+use std::sync::Arc;
+use task_executor::TaskExecutor;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
-use types::EthSpec;
+use types::{ChainSpec, EthSpec};
+use validator_metrics::set_gauge;
 
 /// Spawns a notifier service which periodically logs information about the node.
-pub fn spawn_notifier<E: EthSpec>(client: &ProductionValidatorClient<E>) -> Result<(), String> {
-    let context = client.context.service_context("notifier".into());
-    let executor = context.executor.clone();
-    let duties_service = client.duties_service.clone();
-
-    let slot_duration = Duration::from_secs(context.eth2_config.spec.seconds_per_slot);
+pub fn spawn_notifier<T: SlotClock + 'static, E: EthSpec>(
+    duties_service: Arc<DutiesService<T, E>>,
+    executor: TaskExecutor,
+    spec: &ChainSpec,
+) -> Result<(), String> {
+    let slot_duration = Duration::from_secs(spec.seconds_per_slot);
 
     let interval_fut = async move {
         loop {

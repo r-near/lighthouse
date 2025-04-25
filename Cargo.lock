@@ -9819,6 +9819,7 @@ dependencies = [
  "parking_lot 0.12.3",
  "safe_arith",
  "slot_clock",
+ "task_executor",
  "tokio",
  "tracing",
  "tree_hash",

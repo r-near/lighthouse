@@ -1,7 +1,7 @@
 use beacon_node_fallback::BeaconNodeFallback;
-use environment::RuntimeContext;
 use slot_clock::SlotClock;
 use std::sync::Arc;
+use task_executor::TaskExecutor;
 use tokio::time::sleep;
 use tracing::debug;
 use types::EthSpec;
@@ -13,7 +13,7 @@ pub const SLOT_DELAY_DENOMINATOR: u32 = 12;
 /// Starts a service that periodically checks the latency between the VC and the
 /// candidate BNs.
 pub fn start_latency_service<T: SlotClock + 'static, E: EthSpec>(
-    context: RuntimeContext<E>,
+    executor: TaskExecutor,
     slot_clock: T,
     beacon_nodes: Arc<BeaconNodeFallback<T, E>>,
 ) {
@@ -57,5 +57,5 @@ pub fn start_latency_service<T: SlotClock + 'static, E: EthSpec>(
         }
     };
 
-    context.executor.spawn(future, "latency");
+    executor.spawn(future, "latency");
 }
