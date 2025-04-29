@@ -158,7 +158,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                         db.hot_db.do_atomically(ops)?;
                         diffs_written += 1;
                     }
-                    StorageStrategy::ReplayFrom(_) => {
+                    StorageStrategy::ReplayFrom(diff_base_slot) => {
                         // Optimization: instead of having to load the state of each summary we load x32
                         // less states by manually computing the HotStateSummary roots using the
                         // computed state dag.
@@ -167,34 +167,31 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                         // blocks.
                         //
                         // 2. Convert the summary to the new format.
-                        let previous_state_root = if state_root == split.state_root {
-                            Hash256::ZERO
-                        } else {
+                        if state_root == split.state_root {
+                            return Err(Error::MigrationError(
+                                "unreachable: split state should be stored as a snapshot"
+                                    .to_string(),
+                            ));
+                        }
+                        let previous_state_root = state_summaries_dag
+                            .previous_state_root(state_root)
+                            .map_err(|e| {
+                                Error::MigrationError(format!(
+                                    "error computing previous_state_root {e:?}"
+                                ))
+                            })?;
+
+                        let diff_base_state_root = DiffBaseStateRoot::new(
+                            diff_base_slot,
                             state_summaries_dag
-                                .previous_state_root(state_root)
+                                .ancestor_state_root_at_slot(state_root, diff_base_slot)
                                 .map_err(|e| {
                                     Error::MigrationError(format!(
-                                        "error computing previous_state_root {e:?}"
+                                        "error computing ancestor_state_root_at_slot \
+                                         ({state_root:?}, {diff_base_slot}): {e:?}"
                                     ))
-                                })?
-                        };
-
-                        let diff_base_state_root = if let Some(diff_base_slot) =
-                            storage_strategy.diff_base_slot()
-                        {
-                            DiffBaseStateRoot::new(
-                                    diff_base_slot,
-                                    state_summaries_dag
-                                        .ancestor_state_root_at_slot(state_root, diff_base_slot)
-                                        .map_err(|e| {
-                                            Error::MigrationError(format!(
-                                                "error computing ancestor_state_root_at_slot({state_root:?}, {diff_base_slot}) {e:?}"
-                                            ))
-                                        })?,
-                                )
-                        } else {
-                            DiffBaseStateRoot::zero()
-                        };
+                                })?,
+                        );
 
                         let new_summary = HotStateSummary {
                             slot,
