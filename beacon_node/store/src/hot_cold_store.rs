@@ -1519,7 +1519,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             ?state_root,
             slot = %state.slot(),
             storage_strategy = ?self.hot_storage_strategy(state.slot())?,
-            diff_base_state_root = ?summary.diff_base_state_root,
+            diff_base_state = %summary.diff_base_state,
             previous_state_root = ?summary.previous_state_root,
             "Storing hot state summary and diffs"
         );
@@ -1656,7 +1656,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         // FIXME(tree-states): Add cache of hot hdiff buffers
         let Some(HotStateSummary {
             slot,
-            diff_base_state_root,
+            diff_base_state,
             ..
         }) = self.load_hot_state_summary(&state_root)?
         else {
@@ -1665,7 +1665,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 .into_iter()
                 .map(|(state_root, summary)| (state_root, summary.slot))
                 .collect::<Vec<(Hash256, Slot)>>();
-            existing_summaries.sort_by(|a, b| a.1.cmp(&b.1));
+            existing_summaries.sort_by_key(|(_, slot)| *slot);
             // Hot summaries should never be missing, dump the current list of summaries to ease debug
             // TODO(hdiff): this log is for debug and can include a very long list of roots,
             // thousands in non-finality.
@@ -1695,7 +1695,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 Ok(buffer)
             }
             StorageStrategy::DiffFrom(from_slot) => {
-                let from_state_root = diff_base_state_root.get_root(from_slot)?;
+                let from_state_root = diff_base_state.get_root(from_slot)?;
                 let mut buffer = self.load_hot_hdiff_buffer(from_state_root).map_err(|e| {
                     Error::LoadingHotHdiffBufferError(
                         format!("load hdiff DiffFrom {from_slot} {state_root}"),
@@ -1708,7 +1708,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 Ok(buffer)
             }
             StorageStrategy::ReplayFrom(from_slot) => {
-                let from_state_root = diff_base_state_root.get_root(from_slot)?;
+                let from_state_root = diff_base_state.get_root(from_slot)?;
                 self.load_hot_hdiff_buffer(from_state_root).map_err(|e| {
                     Error::LoadingHotHdiffBufferError(
                         format!("load hdiff ReplayFrom {from_slot} {state_root}"),
@@ -1750,7 +1750,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         if let Some(HotStateSummary {
             slot,
             latest_block_root,
-            diff_base_state_root,
+            diff_base_state,
             ..
         }) = self.load_hot_state_summary(state_root)?
         {
@@ -1774,7 +1774,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                     state
                 }
                 StorageStrategy::ReplayFrom(from_slot) => {
-                    let from_state_root = diff_base_state_root.get_root(from_slot)?;
+                    let from_state_root = diff_base_state.get_root(from_slot)?;
 
                     let (mut base_state, _) = self
                         .load_hot_state(&from_state_root, update_cache)
@@ -3558,14 +3558,20 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
             Ordering::Greater => {} // keep going
         }
 
-        // Jump to an older state summary that is ancestor of `state_root`
-        if target_slot <= state_summary.diff_base_state_root.slot {
-            // As an optimization use the HDiff state root to jump states faster
-            state_root = state_summary.diff_base_state_root.state_root;
-        } else {
-            // Else jump slot by slot
-            state_root = state_summary.previous_state_root;
+        // Jump to an older state summary that is an ancestor of `state_root`
+        if let OptionalDiffBaseState::BaseState(DiffBaseState {
+            slot,
+            state_root: diff_base_state_root,
+        }) = state_summary.diff_base_state
+        {
+            if target_slot <= slot {
+                // As an optimization use the HDiff state root to jump states faster
+                state_root = diff_base_state_root;
+            }
+            continue;
         }
+        // Else jump slot by slot
+        state_root = state_summary.previous_state_root;
     }
 }
 
@@ -3577,45 +3583,72 @@ pub struct HotStateSummary {
     pub slot: Slot,
     pub latest_block_root: Hash256,
     pub latest_block_slot: Slot,
-    // FIXME(tree-states): consider not storing the storage strategy and storing a state root instead
-    pub diff_base_state_root: DiffBaseStateRoot,
-    // FIXME(tree-states): should add this as part of this migration
+    pub diff_base_state: OptionalDiffBaseState,
     pub previous_state_root: Hash256,
 }
 
-/// Cache for a single state root associated with a slot
+/// Information about the state that a hot state is diffed from or replays blocks from, if any.
+///
+/// In the case of a snapshot, there is no diff base state, so this value will be
+/// `DiffBaseState::Snapshot`.
 #[derive(Debug, Clone, Copy, Encode, Decode)]
-pub struct DiffBaseStateRoot {
+#[ssz(enum_behaviour = "union")]
+pub enum OptionalDiffBaseState {
+    Snapshot(Slot),
+    BaseState(DiffBaseState),
+}
+
+#[derive(Debug, Clone, Copy, Encode, Decode)]
+pub struct DiffBaseState {
     slot: Slot,
     state_root: Hash256,
 }
 
-impl DiffBaseStateRoot {
+impl OptionalDiffBaseState {
     pub fn new(slot: Slot, state_root: Hash256) -> Self {
-        Self { slot, state_root }
-    }
-
-    pub fn zero() -> Self {
-        Self {
-            slot: Slot::new(0),
-            state_root: Hash256::ZERO,
-        }
+        Self::BaseState(DiffBaseState { slot, state_root })
     }
 
     pub fn get_root(&self, slot: Slot) -> Result<Hash256, Error> {
-        if self.slot == slot {
-            Ok(self.state_root)
-        } else {
-            Err(Error::MissmatchDiffBaseStateRoot {
-                expected_slot: slot,
-                stored_slot: self.slot,
-            })
+        match *self {
+            Self::Snapshot(stored_slot) => {
+                if slot == stored_slot {
+                    Err(Error::SnapshotDiffBaseState { slot })
+                } else {
+                    Err(Error::MismatchedDiffBaseState {
+                        expected_slot: slot,
+                        stored_slot,
+                    })
+                }
+            }
+            Self::BaseState(DiffBaseState {
+                slot: stored_slot,
+                state_root,
+            }) => {
+                if stored_slot == slot {
+                    Ok(state_root)
+                } else {
+                    Err(Error::MismatchedDiffBaseState {
+                        expected_slot: slot,
+                        stored_slot,
+                    })
+                }
+            }
         }
     }
 }
 
 // Succint rendering of (slot, state_root) pair for "Storing hot state summary and diffs" log
-impl std::fmt::Display for DiffBaseStateRoot {
+impl std::fmt::Display for OptionalDiffBaseState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot(slot) => write!(f, "{slot}/snapshot"),
+            Self::BaseState(base_state) => write!(f, "{base_state}"),
+        }
+    }
+}
+
+impl std::fmt::Display for DiffBaseState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{:?}", self.slot, self.state_root)
     }
@@ -3662,10 +3695,10 @@ impl HotStateSummary {
             }
         };
         let diff_base_slot = storage_strategy.diff_base_slot();
-        let diff_base_state_root = if let Some(diff_base_slot) = diff_base_slot {
-            DiffBaseStateRoot::new(diff_base_slot, get_state_root(diff_base_slot)?)
+        let diff_base_state = if let Some(diff_base_slot) = diff_base_slot {
+            OptionalDiffBaseState::new(diff_base_slot, get_state_root(diff_base_slot)?)
         } else {
-            DiffBaseStateRoot::zero()
+            OptionalDiffBaseState::Snapshot(state.slot())
         };
 
         let previous_state_root = if state.slot() == 0 {
@@ -3679,7 +3712,7 @@ impl HotStateSummary {
             slot: state.slot(),
             latest_block_root,
             latest_block_slot: state.latest_block_header().slot,
-            diff_base_state_root,
+            diff_base_state,
             previous_state_root,
         })
     }

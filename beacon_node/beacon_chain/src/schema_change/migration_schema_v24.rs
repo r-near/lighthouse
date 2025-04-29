@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 use store::{
-    get_full_state_v22, hdiff::StorageStrategy, hot_cold_store::DiffBaseStateRoot,
+    get_full_state_v22, hdiff::StorageStrategy, hot_cold_store::OptionalDiffBaseState,
     store_full_state_v22, DBColumn, Error, HotColdDB, HotStateSummary, KeyValueStore,
     KeyValueStoreOp, StoreItem,
 };
@@ -181,7 +181,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                                 ))
                             })?;
 
-                        let diff_base_state_root = DiffBaseStateRoot::new(
+                        let diff_base_state = OptionalDiffBaseState::new(
                             diff_base_slot,
                             state_summaries_dag
                                 .ancestor_state_root_at_slot(state_root, diff_base_slot)
@@ -198,7 +198,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                             latest_block_root: old_summary.latest_block_root,
                             latest_block_slot: old_summary.latest_block_slot,
                             previous_state_root,
-                            diff_base_state_root,
+                            diff_base_state,
                         };
                         let op = new_summary.as_kv_store_op(state_root);
                         // It's not ncessary to immediately commit the summaries of states that are

@@ -83,9 +83,12 @@ pub enum Error {
     MissingBlock(Hash256),
     GenesisStateUnknown,
     ArithError(safe_arith::ArithError),
-    MissmatchDiffBaseStateRoot {
+    MismatchedDiffBaseState {
         expected_slot: Slot,
         stored_slot: Slot,
+    },
+    SnapshotDiffBaseState {
+        slot: Slot,
     },
     LoadAnchorInfo(Box<Error>),
     LoadSplit(Box<Error>),
