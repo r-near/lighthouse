@@ -115,7 +115,6 @@ pub struct SubscriptionSlots {
     duty_slot: Slot,
 }
 
-#[derive(Clone)]
 pub struct SelectionProofConfig {
     pub lookahead_slot: u64,
     pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
@@ -130,10 +129,10 @@ async fn make_selection_proof<T: SlotClock + 'static, E: EthSpec>(
     duty: &AttesterData,
     validator_store: &ValidatorStore<T, E>,
     spec: &ChainSpec,
-    duties_service: &DutiesService<T, E>,
     beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
+    config: &SelectionProofConfig,
 ) -> Result<Option<SelectionProof>, Error> {
-    let selection_proof = if duties_service.selection_proof_config.selections_endpoint {
+    let selection_proof = if config.selections_endpoint {
         let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
@@ -1161,12 +1160,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
     while !duties_by_slot.is_empty() {
         if let Some(duration) = slot_clock.duration_to_next_slot() {
             sleep(
-                duration.saturating_sub(
-                    duties_service
-                        .sync_duties
-                        .selection_proof_config
-                        .computation_offset,
-                ),
+                duration.saturating_sub(duties_service.selection_proof_config.computation_offset),
             )
             .await;
 
@@ -1174,18 +1168,11 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                 continue;
             };
 
-            let selection_lookahead = duties_service
-                .sync_duties
-                .selection_proof_config
-                .lookahead_slot;
+            let selection_lookahead = duties_service.selection_proof_config.lookahead_slot;
 
             let lookahead_slot = current_slot + selection_lookahead;
 
-            let relevant_duties = if duties_service
-                .sync_duties
-                .selection_proof_config
-                .parallel_sign
-            {
+            let relevant_duties = if duties_service.selection_proof_config.parallel_sign {
                 // Remove old slot duties and only keep current duties in distributed mode
                 duties_by_slot
                     .remove(&lookahead_slot)
@@ -1211,11 +1198,7 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
             // In distributed case, we want to send all partial selection proofs to the middleware to determine aggregation duties,
             // as the middleware will need to have a threshold of partial selection proofs to be able to return the full selection proof
             // Thus, sign selection proofs in parallel in distributed case; Otherwise, sign them serially in non-distributed (normal) case
-            if duties_service
-                .sync_duties
-                .selection_proof_config
-                .parallel_sign
-            {
+            if duties_service.selection_proof_config.parallel_sign {
                 let mut duty_and_proof_results = relevant_duties
                     .into_values()
                     .flatten()
@@ -1224,8 +1207,8 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duty,
                             &duties_service.validator_store,
                             &duties_service.spec,
-                            &duties_service,
                             &duties_service.beacon_nodes,
+                            &duties_service.selection_proof_config,
                         )
                         .await?;
                         Ok((duty, opt_selection_proof))
@@ -1252,8 +1235,8 @@ async fn fill_in_selection_proofs<T: SlotClock + 'static, E: EthSpec>(
                             &duty,
                             &duties_service.validator_store,
                             &duties_service.spec,
-                            &duties_service,
                             &duties_service.beacon_nodes,
+                            &duties_service.selection_proof_config,
                         )
                         .await?;
                         Ok((duty, opt_selection_proof))

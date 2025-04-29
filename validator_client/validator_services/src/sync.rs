@@ -14,11 +14,6 @@ use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, PublicKeyBytes, Slot, SyncDuty, SyncSelectionProof, SyncSubnetId};
 use validator_store::Error as ValidatorStoreError;
 
-/// Number of epochs in advance to compute selection proofs when not in `distributed` mode.
-pub const AGGREGATION_PRE_COMPUTE_EPOCHS: u64 = 2;
-/// Number of slots in advance to compute selection proofs when in `distributed` mode.
-pub const AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED: u64 = 1;
-
 /// Top-level data-structure containing sync duty information.
 ///
 /// This data is structured as a series of nested `HashMap`s wrapped in `RwLock`s. Fine-grained
@@ -106,15 +101,6 @@ impl<E: EthSpec> SyncDutiesMap<E> {
             })
     }
 
-    /// Number of slots in advance to compute selection proofs
-    fn aggregation_pre_compute_slots(&self) -> u64 {
-        if self.selection_proof_config.parallel_sign {
-            AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED
-        } else {
-            E::slots_per_epoch() * AGGREGATION_PRE_COMPUTE_EPOCHS
-        }
-    }
-
     /// Prepare for pre-computation of selection proofs for `committee_period`.
     ///
     /// Return the slot up to which proofs should be pre-computed, as well as a vec of
@@ -130,7 +116,7 @@ impl<E: EthSpec> SyncDutiesMap<E> {
             current_slot,
             first_slot_of_period::<E>(committee_period, spec),
         );
-        let pre_compute_lookahead_slots = self.aggregation_pre_compute_slots();
+        let pre_compute_lookahead_slots = self.selection_proof_config.lookahead_slot;
         let pre_compute_slot = std::cmp::min(
             current_slot + pre_compute_lookahead_slots,
             last_slot_of_period::<E>(committee_period, spec),
@@ -382,7 +368,7 @@ pub async fn poll_sync_committee_duties<T: SlotClock + 'static, E: EthSpec>(
     }
 
     // Pre-compute aggregator selection proofs for the next period.
-    let aggregate_pre_compute_lookahead_slots = sync_duties.aggregation_pre_compute_slots();
+    let aggregate_pre_compute_lookahead_slots = sync_duties.selection_proof_config.lookahead_slot;
     if (current_slot + aggregate_pre_compute_lookahead_slots)
         .epoch(E::slots_per_epoch())
         .sync_committee_period(spec)?

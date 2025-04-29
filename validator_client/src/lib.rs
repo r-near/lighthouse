@@ -86,6 +86,11 @@ const SELECTION_PROOF_SLOT_LOOKAHEAD_DVT: u64 = 1;
 /// Fraction of a slot at which selection proof signing should happen (2 means half way).
 const SELECTION_PROOF_SCHEDULE_DENOM: u32 = 2;
 
+/// Number of epochs in advance to compute selection proofs when not in `distributed` mode.
+pub const AGGREGATION_PRE_COMPUTE_EPOCHS: u64 = 2;
+/// Number of slots in advance to compute selection proofs when in `distributed` mode.
+pub const AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED: u64 = 1;
+
 #[derive(Clone)]
 pub struct ProductionValidatorClient<E: EthSpec> {
     context: RuntimeContext<E>,
@@ -459,7 +464,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
         // Define a config to be pass to fill_in_selection_proofs.
         // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
         // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
-        let selection_proof_config = if config.distributed {
+        let attestation_selection_proof_config = if config.distributed {
             SelectionProofConfig {
                 lookahead_slot: SELECTION_PROOF_SLOT_LOOKAHEAD_DVT,
                 computation_offset: slot_clock.slot_duration() / SELECTION_PROOF_SCHEDULE_DENOM,
@@ -475,11 +480,27 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             }
         };
 
+        let sync_selection_proof_config = if config.distributed {
+            SelectionProofConfig {
+                lookahead_slot: AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED,
+                computation_offset: Duration::default(),
+                selections_endpoint: true,
+                parallel_sign: true,
+            }
+        } else {
+            SelectionProofConfig {
+                lookahead_slot: E::slots_per_epoch() * AGGREGATION_PRE_COMPUTE_EPOCHS,
+                computation_offset: Duration::default(),
+                selections_endpoint: false,
+                parallel_sign: false,
+            }
+        };
+
         let duties_context = context.service_context("duties".into());
         let duties_service = Arc::new(DutiesService {
             attesters: <_>::default(),
             proposers: <_>::default(),
-            sync_duties: SyncDutiesMap::new(selection_proof_config.clone()),
+            sync_duties: SyncDutiesMap::new(sync_selection_proof_config),
             slot_clock: slot_clock.clone(),
             beacon_nodes: beacon_nodes.clone(),
             validator_store: validator_store.clone(),
@@ -487,7 +508,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             spec: context.eth2_config.spec.clone(),
             context: duties_context,
             enable_high_validator_count_metrics: config.enable_high_validator_count_metrics,
-            selection_proof_config,
+            selection_proof_config: attestation_selection_proof_config,
             disable_attesting: config.disable_attesting,
         });
 
