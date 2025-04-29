@@ -3594,7 +3594,8 @@ pub struct HotStateSummary {
 #[derive(Debug, Clone, Copy, Encode, Decode)]
 #[ssz(enum_behaviour = "union")]
 pub enum OptionalDiffBaseState {
-    Snapshot(Slot),
+    // The SSZ crate requires *something* in each variant so we just store a u8 set to 0.
+    Snapshot(u8),
     BaseState(DiffBaseState),
 }
 
@@ -3611,16 +3612,7 @@ impl OptionalDiffBaseState {
 
     pub fn get_root(&self, slot: Slot) -> Result<Hash256, Error> {
         match *self {
-            Self::Snapshot(stored_slot) => {
-                if slot == stored_slot {
-                    Err(Error::SnapshotDiffBaseState { slot })
-                } else {
-                    Err(Error::MismatchedDiffBaseState {
-                        expected_slot: slot,
-                        stored_slot,
-                    })
-                }
-            }
+            Self::Snapshot(_) => Err(Error::SnapshotDiffBaseState { slot }),
             Self::BaseState(DiffBaseState {
                 slot: stored_slot,
                 state_root,
@@ -3642,7 +3634,7 @@ impl OptionalDiffBaseState {
 impl std::fmt::Display for OptionalDiffBaseState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Snapshot(slot) => write!(f, "{slot}/snapshot"),
+            Self::Snapshot(_) => write!(f, "snapshot"),
             Self::BaseState(base_state) => write!(f, "{base_state}"),
         }
     }
@@ -3698,7 +3690,7 @@ impl HotStateSummary {
         let diff_base_state = if let Some(diff_base_slot) = diff_base_slot {
             OptionalDiffBaseState::new(diff_base_slot, get_state_root(diff_base_slot)?)
         } else {
-            OptionalDiffBaseState::Snapshot(state.slot())
+            OptionalDiffBaseState::Snapshot(0)
         };
 
         let previous_state_root = if state.slot() == 0 {
