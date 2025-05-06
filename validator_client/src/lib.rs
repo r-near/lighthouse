@@ -461,7 +461,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             validator_store.prune_slashing_protection_db(slot.epoch(E::slots_per_epoch()), true);
         }
 
-        // Define a config to be pass to fill_in_selection_proofs.
+        // Define a config to be pass to duties_service.
         // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
         // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
         let attestation_selection_proof_config = if config.distributed {
