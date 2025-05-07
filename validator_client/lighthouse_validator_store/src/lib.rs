@@ -2,7 +2,7 @@ use account_utils::validator_definitions::{PasswordStorage, ValidatorDefinition}
 use doppelganger_service::DoppelgangerService;
 use initialized_validators::InitializedValidators;
 use logging::crit;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use signing_method::Error as SigningError;
 use signing_method::{SignableMessage, SigningContext, SigningMethod};
@@ -14,6 +14,7 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 use task_executor::TaskExecutor;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use types::{
     graffiti::GraffitiString, AbstractExecPayload, Address, AggregateAndProof, Attestation,
@@ -565,8 +566,8 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     ///
     /// - Unknown.
     /// - Known, but with an unknown index.
-    fn validator_index(&self, pubkey: &PublicKeyBytes) -> Option<u64> {
-        self.validators.read().get_index(pubkey)
+    fn validator_index(&self, pubkey: &PublicKeyBytes) -> impl Future<Output = Option<u64>> {
+        async { self.validators.read().await.get_index(pubkey) }
     }
 
     /// Returns all voting pubkeys for all enabled validators.
