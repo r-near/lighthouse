@@ -46,7 +46,10 @@ pub trait ValidatorStore: Send + Sync {
     ///
     /// - Unknown.
     /// - Known, but with an unknown index.
-    fn validator_index(&self, pubkey: &PublicKeyBytes) -> impl Future<Output = Option<u64>> + Sync;
+    fn validator_index(
+        &self,
+        pubkey: &PublicKeyBytes,
+    ) -> impl Future<Output = Option<u64>> + Send + Sync;
 
     /// Returns all voting pubkeys for all enabled validators.
     ///

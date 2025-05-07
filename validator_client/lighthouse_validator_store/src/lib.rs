@@ -113,9 +113,9 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     /// duplicate validators operating on the network at the same time.
     ///
     /// This function has no effect if doppelganger protection is disabled.
-    pub fn register_all_in_doppelganger_protection_if_enabled(&self) -> Result<(), String> {
+    pub async fn register_all_in_doppelganger_protection_if_enabled(&self) -> Result<(), String> {
         if let Some(doppelganger_service) = &self.doppelganger_service {
-            for pubkey in self.validators.read().iter_voting_pubkeys() {
+            for pubkey in self.validators.read().await.iter_voting_pubkeys() {
                 doppelganger_service.register_new_validator(
                     *pubkey,
                     &self.slot_clock,
@@ -137,9 +137,10 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     }
 
     /// Indicates if the `voting_public_key` exists in self and is enabled.
-    pub fn has_validator(&self, voting_public_key: &PublicKeyBytes) -> bool {
+    pub async fn has_validator(&self, voting_public_key: &PublicKeyBytes) -> bool {
         self.validators
             .read()
+            .await
             .validator(voting_public_key)
             .is_some()
     }
@@ -183,8 +184,6 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     /// - Adding the validator definition to the YAML file, saving it to the filesystem.
     /// - Enabling the validator with the slashing protection database.
     /// - If `enable == true`, starting to perform duties for the validator.
-    // FIXME: ignore this clippy lint until the validator store is refactored to use async locks
-    #[allow(clippy::await_holding_lock)]
     pub async fn add_validator(
         &self,
         validator_def: ValidatorDefinition,
@@ -205,6 +204,7 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
 
         self.validators
             .write()
+            .await
             .add_definition_replace_disabled(validator_def.clone())
             .await
             .map_err(|e| format!("Unable to add definition: {:?}", e))?;
@@ -214,12 +214,13 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
 
     /// Returns doppelganger statuses for all enabled validators.
     #[allow(clippy::needless_collect)] // Collect is required to avoid holding a lock.
-    pub fn doppelganger_statuses(&self) -> Vec<DoppelgangerStatus> {
+    pub async fn doppelganger_statuses(&self) -> Vec<DoppelgangerStatus> {
         // Collect all the pubkeys first to avoid interleaving locks on `self.validators` and
         // `self.doppelganger_service`.
         let pubkeys = self
             .validators
             .read()
+            .await
             .iter_voting_pubkeys()
             .cloned()
             .collect::<Vec<_>>();
@@ -242,13 +243,14 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
 
     /// Returns a `SigningMethod` for `validator_pubkey` *only if* that validator is considered safe
     /// by doppelganger protection.
-    fn doppelganger_checked_signing_method(
+    async fn doppelganger_checked_signing_method(
         &self,
         validator_pubkey: PublicKeyBytes,
     ) -> Result<Arc<SigningMethod>, Error> {
         if self.doppelganger_protection_allows_signing(validator_pubkey) {
             self.validators
                 .read()
+                .await
                 .signing_method(&validator_pubkey)
                 .ok_or(Error::UnknownPubkey(validator_pubkey))
         } else {
@@ -459,7 +461,9 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
         let signing_context = self.signing_context(Domain::BeaconProposer, signing_epoch);
         let domain_hash = signing_context.domain_hash(&self.spec);
 
-        let signing_method = self.doppelganger_checked_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_checked_signing_method(validator_pubkey)
+            .await?;
 
         // Check for slashing conditions.
         let slashing_status = if signing_method
@@ -566,8 +570,8 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     ///
     /// - Unknown.
     /// - Known, but with an unknown index.
-    fn validator_index(&self, pubkey: &PublicKeyBytes) -> impl Future<Output = Option<u64>> {
-        async { self.validators.read().await.get_index(pubkey) }
+    async fn validator_index(&self, pubkey: &PublicKeyBytes) -> Option<u64> {
+        self.validators.read().await.get_index(pubkey)
     }
 
     /// Returns all voting pubkeys for all enabled validators.
@@ -706,7 +710,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         validator_pubkey: PublicKeyBytes,
         signing_epoch: Epoch,
     ) -> Result<Signature, Error> {
-        let signing_method = self.doppelganger_checked_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_checked_signing_method(validator_pubkey)
+            .await?;
         let signing_context = self.signing_context(Domain::Randao, signing_epoch);
 
         let signature = signing_method
@@ -761,7 +767,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         }
 
         // Get the signing method and check doppelganger protection.
-        let signing_method = self.doppelganger_checked_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_checked_signing_method(validator_pubkey)
+            .await?;
 
         // Checking for slashing conditions.
         let signing_epoch = attestation.data().target.epoch;
@@ -882,7 +890,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let message =
             AggregateAndProof::from_attestation(aggregator_index, aggregate, selection_proof);
 
-        let signing_method = self.doppelganger_checked_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_checked_signing_method(validator_pubkey)
+            .await?;
         let signature = signing_method
             .get_signature::<E, BlindedPayload<E>>(
                 SignableMessage::SignedAggregateAndProof(message.to_ref()),

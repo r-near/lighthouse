@@ -223,7 +223,7 @@ impl DoppelgangerService {
         // Define the `get_index` function as one that uses the validator store.
         let get_index = move |pubkey| {
             let inner_store = validator_store.clone();
-            async move { inner_store.clone().get_validator_index(&pubkey).await }
+            async move { inner_store.clone().validator_index(&pubkey).await }
         };
 
         // Define the `get_liveness` function as one that queries the beacon node API.
@@ -726,7 +726,7 @@ mod test {
             self
         }
 
-        pub fn assert_all_enabled(self) -> Self {
+        pub async fn assert_all_enabled(self) -> Self {
             /*
              * 1. Ensure all validators have the correct status.
              */
@@ -744,7 +744,11 @@ mod test {
             let pubkey_to_index = self.pubkey_to_index_map();
             let generated_map = self
                 .doppelganger
-                .compute_detection_indices_map(&|pubkey| pubkey_to_index.get(&pubkey).copied());
+                .compute_detection_indices_map(&|pubkey| {
+                    let inner_map = pubkey_to_index.clone();
+                    async move { inner_map.get(&pubkey).copied() }
+                })
+                .await;
             assert!(
                 generated_map.is_empty(),
                 "there should be no indices for detection if all validators are enabled"
@@ -753,7 +757,7 @@ mod test {
             self
         }
 
-        pub fn assert_all_disabled(self) -> Self {
+        pub async fn assert_all_disabled(self) -> Self {
             /*
              * 1. Ensure all validators have the correct status.
              */
@@ -771,7 +775,11 @@ mod test {
             let pubkey_to_index = self.pubkey_to_index_map();
             let generated_map = self
                 .doppelganger
-                .compute_detection_indices_map(&|pubkey| pubkey_to_index.get(&pubkey).copied());
+                .compute_detection_indices_map(&|pubkey| {
+                    let inner_map = pubkey_to_index.clone();
+                    async move { inner_map.get(&pubkey).copied() }
+                })
+                .await;
 
             assert_eq!(
                 pubkey_to_index.len(),
@@ -841,14 +849,15 @@ mod test {
         }
     }
 
-    #[test]
-    fn enabled_in_genesis_epoch() {
+    #[tokio::test]
+    async fn enabled_in_genesis_epoch() {
         for slot in genesis_epoch().slot_iter(E::slots_per_epoch()) {
             TestBuilder::default()
                 .build()
                 .set_slot(slot)
                 .register_all_in_doppelganger_protection_if_enabled()
                 .assert_all_enabled()
+                .await
                 .assert_all_states(&DoppelgangerState {
                     next_check_epoch: genesis_epoch() + 1,
                     remaining_epochs: 0,
@@ -856,8 +865,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn disabled_after_genesis_epoch() {
+    #[tokio::test]
+    async fn disabled_after_genesis_epoch() {
         let epoch = genesis_epoch() + 1;
 
         for slot in epoch.slot_iter(E::slots_per_epoch()) {
@@ -866,6 +875,7 @@ mod test {
                 .set_slot(slot)
                 .register_all_in_doppelganger_protection_if_enabled()
                 .assert_all_disabled()
+                .await
                 .assert_all_states(&DoppelgangerState {
                     next_check_epoch: epoch + 1,
                     remaining_epochs: DEFAULT_REMAINING_DETECTION_EPOCHS,
@@ -938,9 +948,12 @@ mod test {
 
             // Create a simulated validator store that can resolve pubkeys to indices.
             let pubkey_to_index = self.pubkey_to_index_map();
-            let get_index = |pubkey| pubkey_to_index.get(&pubkey).copied();
+            let get_index = |pubkey| {
+                let inner_map = pubkey_to_index.clone();
+                async move { inner_map.get(&pubkey).copied() }
+            };
 
-            block_on(self.doppelganger.detect_doppelgangers::<E, _, _, _, _>(
+            block_on(self.doppelganger.detect_doppelgangers::<E, _, _, _, _, _>(
                 slot,
                 &get_index,
                 &get_liveness,
@@ -958,8 +971,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn detect_at_genesis() {
+    #[tokio::test]
+    async fn detect_at_genesis() {
         let epoch = genesis_epoch();
         let slot = epoch.start_slot(E::slots_per_epoch());
 
@@ -969,6 +982,7 @@ mod test {
             .register_all_in_doppelganger_protection_if_enabled()
             // All validators should have signing enabled since it's the genesis epoch.
             .assert_all_enabled()
+            .await
             .simulate_detect_doppelgangers(
                 slot,
                 ShouldShutdown::No,
@@ -984,7 +998,7 @@ mod test {
             .assert_all_enabled();
     }
 
-    fn detect_after_genesis_test<F>(mutate_responses: F)
+    async fn detect_after_genesis_test<F>(mutate_responses: F)
     where
         F: Fn(&mut LivenessResponses),
     {
@@ -999,6 +1013,7 @@ mod test {
             .set_slot(starting_slot)
             .register_all_in_doppelganger_protection_if_enabled()
             .assert_all_disabled()
+            .await
             // First, simulate a check where there are no doppelgangers.
             .simulate_detect_doppelgangers(
                 checking_slot,
@@ -1014,6 +1029,7 @@ mod test {
             )
             // All validators should be disabled since they started after genesis.
             .assert_all_disabled()
+            .await
             // Now, simulate a check where we apply `mutate_responses` which *must* create some
             // doppelgangers.
             .simulate_detect_doppelgangers(
@@ -1033,6 +1049,7 @@ mod test {
             )
             // All validators should still be disabled.
             .assert_all_disabled()
+            .await
             // The states of all validators should be jammed with `u64:MAX`.
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: starting_epoch + 1,
@@ -1040,18 +1057,20 @@ mod test {
             });
     }
 
-    #[test]
-    fn detect_after_genesis_with_current_epoch_doppelganger() {
+    #[tokio::test]
+    async fn detect_after_genesis_with_current_epoch_doppelganger() {
         detect_after_genesis_test(|liveness_responses| {
             liveness_responses.current_epoch_responses[0].is_live = true
         })
+        .await
     }
 
-    #[test]
-    fn detect_after_genesis_with_previous_epoch_doppelganger() {
+    #[tokio::test]
+    async fn detect_after_genesis_with_previous_epoch_doppelganger() {
         detect_after_genesis_test(|liveness_responses| {
             liveness_responses.previous_epoch_responses[0].is_live = true
         })
+        .await
     }
 
     #[test]
@@ -1065,8 +1084,8 @@ mod test {
             .register_all_in_doppelganger_protection_if_enabled();
     }
 
-    #[test]
-    fn detect_doppelganger_in_starting_epoch() {
+    #[tokio::test]
+    async fn detect_doppelganger_in_starting_epoch() {
         let epoch = genesis_epoch() + 1;
         let slot = epoch.start_slot(E::slots_per_epoch());
 
@@ -1075,6 +1094,7 @@ mod test {
             .set_slot(slot)
             .register_all_in_doppelganger_protection_if_enabled()
             .assert_all_disabled()
+            .await
             // First, simulate a check where there is a doppelganger in the starting epoch.
             //
             // This should *not* cause a shutdown since we don't declare a doppelganger in the
@@ -1096,14 +1116,15 @@ mod test {
                 },
             )
             .assert_all_disabled()
+            .await
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: epoch + 1,
                 remaining_epochs: DEFAULT_REMAINING_DETECTION_EPOCHS,
             });
     }
 
-    #[test]
-    fn no_doppelgangers_for_adequate_time() {
+    #[tokio::test]
+    async fn no_doppelgangers_for_adequate_time() {
         let initial_epoch = genesis_epoch() + 42;
         let initial_slot = initial_epoch.start_slot(E::slots_per_epoch());
         let activation_slot =
@@ -1113,7 +1134,8 @@ mod test {
             .build()
             .set_slot(initial_slot)
             .register_all_in_doppelganger_protection_if_enabled()
-            .assert_all_disabled();
+            .assert_all_disabled()
+            .await;
 
         for slot in initial_slot.as_u64()..=activation_slot.as_u64() {
             let slot = Slot::new(slot);
@@ -1159,22 +1181,23 @@ mod test {
             scenario = scenario.assert_all_states(&expected_state);
 
             scenario = if slot < activation_slot {
-                scenario.assert_all_disabled()
+                scenario.assert_all_disabled().await
             } else {
-                scenario.assert_all_enabled()
+                scenario.assert_all_enabled().await
             };
         }
 
         scenario
             .assert_all_enabled()
+            .await
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: activation_slot.epoch(E::slots_per_epoch()),
                 remaining_epochs: 0,
             });
     }
 
-    #[test]
-    fn time_skips_forward_no_doppelgangers() {
+    #[tokio::test]
+    async fn time_skips_forward_no_doppelgangers() {
         let initial_epoch = genesis_epoch() + 1;
         let initial_slot = initial_epoch.start_slot(E::slots_per_epoch());
         let skipped_forward_epoch = initial_epoch + 42;
@@ -1185,6 +1208,7 @@ mod test {
             .set_slot(initial_slot)
             .register_all_in_doppelganger_protection_if_enabled()
             .assert_all_disabled()
+            .await
             // First, simulate a check in the initialization epoch.
             .simulate_detect_doppelgangers(
                 initial_slot,
@@ -1197,6 +1221,7 @@ mod test {
                 },
             )
             .assert_all_disabled()
+            .await
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: initial_epoch + 1,
                 remaining_epochs: DEFAULT_REMAINING_DETECTION_EPOCHS,
