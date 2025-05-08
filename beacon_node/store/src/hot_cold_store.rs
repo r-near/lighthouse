@@ -3493,6 +3493,10 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
         return Ok(*target_state_root);
     }
 
+    // Hold the split lock so that state summaries are not pruned concurrently with this function
+    // running.
+    let split = store.split.read_recursive();
+
     let mut state_root = {
         // We can not start loading summaries from `state_root` since its summary has not yet been
         // imported. This code path is called during block import.
@@ -3523,7 +3527,7 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
         // can reference diffs with a slot prior to the finalized checkpoint. But those are sparse so
         // the probabiliy of hitting `MissingSummary` error is high. Instead, the summary for the
         // finalized state is always available.
-        let start_slot = std::cmp::max(oldest_slot_in_state_roots, store.get_split_slot());
+        let start_slot = std::cmp::max(oldest_slot_in_state_roots, split.slot);
 
         *from_state
             .get_state_root(start_slot)
@@ -3541,6 +3545,7 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
         // Protect against infinite loops if the state summaries are not strictly descending
         if let Some(previous_slot) = previous_slot {
             if state_summary.slot >= previous_slot {
+                drop(split);
                 return Err(StateSummaryIteratorError::CircularSummaries {
                     state_root,
                     state_slot: state_summary.slot,
@@ -3552,7 +3557,8 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
 
         match state_summary.slot.cmp(&target_slot) {
             Ordering::Less => {
-                return Err(StateSummaryIteratorError::BelowTarget(state_summary.slot))
+                drop(split);
+                return Err(StateSummaryIteratorError::BelowTarget(state_summary.slot));
             }
             Ordering::Equal => return Ok(state_root),
             Ordering::Greater => {} // keep going
