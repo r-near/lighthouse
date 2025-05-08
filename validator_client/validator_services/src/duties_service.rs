@@ -658,7 +658,8 @@ async fn poll_validator_indices<S: ValidatorStore, T: SlotClock + 'static>(
                     );
                     duties_service
                         .validator_store
-                        .set_validator_index(&pubkey, response.data.index);
+                        .set_validator_index(&pubkey, response.data.index)
+                        .await;
 
                     duties_service
                         .unknown_validator_next_poll_slots
@@ -756,7 +757,7 @@ async fn poll_beacon_attesters<S: ValidatorStore + 'static, T: SlotClock + 'stat
         )
     }
 
-    update_per_validator_duty_metrics(duties_service, current_epoch, current_slot);
+    update_per_validator_duty_metrics(duties_service, current_epoch, current_slot).await;
 
     drop(current_epoch_timer);
     let next_epoch_timer = validator_metrics::start_timer_vec(
@@ -777,7 +778,7 @@ async fn poll_beacon_attesters<S: ValidatorStore + 'static, T: SlotClock + 'stat
         )
     }
 
-    update_per_validator_duty_metrics(duties_service, next_epoch, current_slot);
+    update_per_validator_duty_metrics(duties_service, next_epoch, current_slot).await;
 
     drop(next_epoch_timer);
     let subscriptions_timer = validator_metrics::start_timer_vec(

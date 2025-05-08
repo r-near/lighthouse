@@ -83,7 +83,7 @@ pub trait ValidatorStore: Send + Sync {
     fn get_fee_recipient(
         &self,
         validator_pubkey: &PublicKeyBytes,
-    ) -> impl Future<Output = Option<Address>>;
+    ) -> impl Future<Output = Option<Address>> + Send + Sync;
 
     /// Translate the `builder_proposals`, `builder_boost_factor` and
     /// `prefer_builder_proposals` to a boost factor, if available.

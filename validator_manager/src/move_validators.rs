@@ -964,7 +964,7 @@ mod test {
             // helps test that we don't delete a password file if it's in use by
             // another validator.
             if let Some(primary_index) = self.reuse_password_files {
-                let mut initialized_validators = src_vc.initialized_validators.write();
+                let mut initialized_validators = src_vc.initialized_validators.write().await;
                 let definitions = initialized_validators.as_mut_slice_testing_only();
                 // Find the path of the "primary" definition.
                 let primary_path = definitions
@@ -1001,6 +1001,7 @@ mod test {
                 let passwords = src_vc
                     .initialized_validators
                     .write()
+                    .await
                     .delete_passwords_from_validator_definitions()
                     .unwrap();
 

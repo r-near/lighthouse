@@ -1,5 +1,6 @@
 use crate::reject::convert_rejection;
 use serde::Serialize;
+use std::future::Future;
 use warp::reply::{Reply, Response};
 
 /// A convenience wrapper around `blocking_task`.
@@ -36,5 +37,15 @@ where
     })
     .await;
 
+    convert_rejection(result).await
+}
+
+/// Async variant of `blocking_json_task`, which handles JSONification and error conversion.
+pub async fn async_json_task<F, T>(fut: F) -> Response
+where
+    F: Future<Output = Result<T, warp::Rejection>>,
+    T: Serialize + Send + 'static,
+{
+    let result = fut.await.map(|response| warp::reply::json(&response));
     convert_rejection(result).await
 }

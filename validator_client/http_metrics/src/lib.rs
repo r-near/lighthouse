@@ -6,13 +6,13 @@ use lighthouse_validator_store::LighthouseValidatorStore;
 use lighthouse_version::version_with_platform;
 use logging::crit;
 use malloc_utils::scrape_allocator_metrics;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 use tracing::info;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
@@ -124,6 +124,7 @@ pub fn serve<E: EthSpec>(
         .and_then(|ctx: Arc<Context<E>>| async move {
             Ok::<_, warp::Rejection>(
                 gather_prometheus_metrics(&ctx)
+                    .await
                     .map(|body| {
                         Response::builder()
                             .status(200)
@@ -159,7 +160,7 @@ pub fn serve<E: EthSpec>(
     Ok((listening_socket, server))
 }
 
-pub fn gather_prometheus_metrics<E: EthSpec>(
+pub async fn gather_prometheus_metrics<E: EthSpec>(
     ctx: &Context<E>,
 ) -> std::result::Result<String, String> {
     use validator_metrics::*;
@@ -167,7 +168,7 @@ pub fn gather_prometheus_metrics<E: EthSpec>(
     let encoder = TextEncoder::new();
 
     {
-        let shared = ctx.shared.read();
+        let shared = ctx.shared.read().await;
 
         if let Some(genesis_time) = shared.genesis_time {
             if let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -184,17 +185,17 @@ pub fn gather_prometheus_metrics<E: EthSpec>(
                 set_int_gauge(
                     &PROPOSER_COUNT,
                     &[CURRENT_EPOCH],
-                    duties_service.proposer_count(current_epoch) as i64,
+                    duties_service.proposer_count(current_epoch).await as i64,
                 );
                 set_int_gauge(
                     &ATTESTER_COUNT,
                     &[CURRENT_EPOCH],
-                    duties_service.attester_count(current_epoch) as i64,
+                    duties_service.attester_count(current_epoch).await as i64,
                 );
                 set_int_gauge(
                     &ATTESTER_COUNT,
                     &[NEXT_EPOCH],
-                    duties_service.attester_count(next_epoch) as i64,
+                    duties_service.attester_count(next_epoch).await as i64,
                 );
             }
         }

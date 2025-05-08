@@ -22,7 +22,6 @@ use eth2::{reqwest::ClientBuilder, BeaconNodeHttpClient, StatusCode, Timeouts};
 use initialized_validators::Error::UnableToOpenVotingKeystore;
 use lighthouse_validator_store::LighthouseValidatorStore;
 use notifier::spawn_notifier;
-use parking_lot::RwLock;
 use reqwest::Certificate;
 use slot_clock::SlotClock;
 use slot_clock::SystemTimeSlotClock;
@@ -32,6 +31,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 use tokio::{
     sync::mpsc,
     time::{sleep, Duration},
@@ -390,7 +390,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
 
         // Update the metrics server.
         if let Some(ctx) = &validator_metrics_ctx {
-            ctx.shared.write().genesis_time = Some(genesis_time);
+            ctx.shared.write().await.genesis_time = Some(genesis_time);
         }
 
         let slot_clock = SystemTimeSlotClock::new(
@@ -426,10 +426,12 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
         ));
 
         // Ensure all validators are registered in doppelganger protection.
-        validator_store.register_all_in_doppelganger_protection_if_enabled()?;
+        validator_store
+            .register_all_in_doppelganger_protection_if_enabled()
+            .await?;
 
         info!(
-            voting_validators = validator_store.num_voting_validators(),
+            voting_validators = validator_store.num_voting_validators().await,
             "Loaded validator keypair store"
         );
 
@@ -437,7 +439,9 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
         // oversized from having not been pruned (by a prior version) we don't want to prune
         // concurrently, as it will hog the lock and cause the attestation service to spew CRITs.
         if let Some(slot) = slot_clock.now() {
-            validator_store.prune_slashing_protection_db(slot.epoch(E::slots_per_epoch()), true);
+            validator_store
+                .prune_slashing_protection_db(slot.epoch(E::slots_per_epoch()), true)
+                .await;
         }
 
         let duties_service = Arc::new(
@@ -455,8 +459,8 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
 
         // Update the metrics server.
         if let Some(ctx) = &validator_metrics_ctx {
-            ctx.shared.write().validator_store = Some(validator_store.clone());
-            ctx.shared.write().duties_service = Some(duties_service.clone());
+            ctx.shared.write().await.validator_store = Some(validator_store.clone());
+            ctx.shared.write().await.duties_service = Some(duties_service.clone());
         }
 
         let mut block_service_builder = BlockServiceBuilder::new()

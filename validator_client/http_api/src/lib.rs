@@ -54,7 +54,7 @@ use types::{ChainSpec, ConfigAndPreset, EthSpec};
 use validator_dir::Builder as ValidatorDirBuilder;
 use validator_services::block_service::BlockService;
 use warp::{sse::Event, Filter};
-use warp_utils::task::blocking_json_task;
+use warp_utils::task::{async_json_task, blocking_json_task};
 
 #[derive(Debug)]
 pub enum Error {
@@ -320,10 +320,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(warp::path::end())
         .and(validator_store_filter.clone())
         .then(|validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-            blocking_json_task(move || {
+            async_json_task(async move {
                 let validators = validator_store
                     .initialized_validators()
                     .read()
+                    .await
                     .validator_definitions()
                     .iter()
                     .map(|def| api_types::ValidatorData {
@@ -345,10 +346,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(validator_store_filter.clone())
         .then(
             |validator_pubkey: PublicKey, validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     let validator = validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .validator_definitions()
                         .iter()
                         .find(|def| def.voting_public_key == validator_pubkey)
@@ -397,11 +399,12 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
             |validator_store: Arc<LighthouseValidatorStore<T, E>>,
              graffiti_file: Option<GraffitiFile>,
              graffiti_flag: Option<Graffiti>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     let mut result = HashMap::new();
                     for (key, graffiti_definition) in validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .get_all_validators_graffiti()
                     {
                         let graffiti = determine_graffiti(
@@ -697,12 +700,13 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(graffiti_file_filter.clone())
         .and(task_executor_filter.clone())
         .then(
+            // FIXME(sproul): do we need task_executor for anything here?
             |validator_pubkey: PublicKey,
              body: api_types::ValidatorPatchRequest,
              validator_store: Arc<LighthouseValidatorStore<T, E>>,
              graffiti_file: Option<GraffitiFile>,
-             task_executor: TaskExecutor| {
-                blocking_json_task(move || {
+             _task_executor: TaskExecutor| {
+                async_json_task(async move {
                     if body.graffiti.is_some() && graffiti_file.is_some() {
                         return Err(warp_utils::reject::custom_bad_request(
                             "Unable to update graffiti as the \"--graffiti-file\" flag is set"
@@ -711,8 +715,8 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     }
 
                     let maybe_graffiti = body.graffiti.clone().map(Into::into);
-                    let initialized_validators_rw_lock = validator_store.initialized_validators();
-                    let initialized_validators = initialized_validators_rw_lock.upgradable_read();
+                    let initialized_validators_lock = validator_store.initialized_validators();
+                    let mut initialized_validators = initialized_validators_lock.write().await;
 
                     // Do not make any changes if all fields are identical or unchanged.
                     fn equal_or_none<T: PartialEq>(
@@ -770,38 +774,24 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                             Ok(())
                         }
                         (Some(_), _) => {
-                            // Upgrade read lock only in the case where a write is actually
-                            // required.
-                            let mut initialized_validators_write =
-                                parking_lot::RwLockUpgradableReadGuard::upgrade(
-                                    initialized_validators,
-                                );
-                            if let Some(handle) = task_executor.handle() {
-                                handle
-                                    .block_on(
-                                        initialized_validators_write
-                                            .set_validator_definition_fields(
-                                                &validator_pubkey,
-                                                body.enabled,
-                                                body.gas_limit,
-                                                body.builder_proposals,
-                                                body.builder_boost_factor,
-                                                body.prefer_builder_proposals,
-                                                body.graffiti,
-                                            ),
-                                    )
-                                    .map_err(|e| {
-                                        warp_utils::reject::custom_server_error(format!(
-                                            "unable to set validator status: {:?}",
-                                            e
-                                        ))
-                                    })?;
-                                Ok(())
-                            } else {
-                                Err(warp_utils::reject::custom_server_error(
-                                    "Lighthouse shutting down".into(),
-                                ))
-                            }
+                            initialized_validators
+                                .set_validator_definition_fields(
+                                    &validator_pubkey,
+                                    body.enabled,
+                                    body.gas_limit,
+                                    body.builder_proposals,
+                                    body.builder_boost_factor,
+                                    body.prefer_builder_proposals,
+                                    body.graffiti,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    warp_utils::reject::custom_server_error(format!(
+                                        "unable to set validator status: {:?}",
+                                        e
+                                    ))
+                                })?;
+                            Ok(())
                         }
                     }
                 })
@@ -827,10 +817,10 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(warp::body::json())
         .and(validator_store_filter.clone())
         .and(task_executor_filter.clone())
-        .then(move |request, validator_store, task_executor| {
-            blocking_json_task(move || {
+        .then(move |request, validator_store, _task_executor| {
+            async_json_task(async move {
                 if allow_keystore_export {
-                    keystores::export(request, validator_store, task_executor)
+                    keystores::export(request, validator_store).await
                 } else {
                     Err(warp_utils::reject::custom_bad_request(
                         "keystore export is disabled".to_string(),
@@ -853,10 +843,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(validator_store_filter.clone())
         .then(
             |validator_pubkey: PublicKey, validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -867,6 +858,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     }
                     validator_store
                         .get_fee_recipient(&PublicKeyBytes::from(&validator_pubkey))
+                        .await
                         .map(|fee_recipient| {
                             GenericResponse::from(GetFeeRecipientResponse {
                                 pubkey: PublicKeyBytes::from(validator_pubkey.clone()),
@@ -894,10 +886,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
             |validator_pubkey: PublicKey,
              request: api_types::UpdateFeeRecipientRequest,
              validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -909,6 +902,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     validator_store
                         .initialized_validators()
                         .write()
+                        .await
                         .set_validator_fee_recipient(&validator_pubkey, request.ethaddress)
                         .map_err(|e| {
                             warp_utils::reject::custom_server_error(format!(
@@ -919,7 +913,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                 })
             },
         )
-        .map(|reply| warp::reply::with_status(reply, warp::http::StatusCode::ACCEPTED));
+        .map(|response| warp::reply::with_status(response, warp::http::StatusCode::ACCEPTED));
 
     // DELETE /eth/v1/validator/{pubkey}/feerecipient
     let delete_fee_recipient = eth_v1
@@ -930,10 +924,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(validator_store_filter.clone())
         .then(
             |validator_pubkey: PublicKey, validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -945,6 +940,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     validator_store
                         .initialized_validators()
                         .write()
+                        .await
                         .delete_validator_fee_recipient(&validator_pubkey)
                         .map_err(|e| {
                             warp_utils::reject::custom_server_error(format!(
@@ -966,10 +962,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(validator_store_filter.clone())
         .then(
             |validator_pubkey: PublicKey, validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -981,7 +978,8 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     Ok(GenericResponse::from(GetGasLimitResponse {
                         pubkey: PublicKeyBytes::from(validator_pubkey.clone()),
                         gas_limit: validator_store
-                            .get_gas_limit(&PublicKeyBytes::from(&validator_pubkey)),
+                            .get_gas_limit(&PublicKeyBytes::from(&validator_pubkey))
+                            .await,
                     }))
                 })
             },
@@ -999,10 +997,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
             |validator_pubkey: PublicKey,
              request: api_types::UpdateGasLimitRequest,
              validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -1014,6 +1013,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     validator_store
                         .initialized_validators()
                         .write()
+                        .await
                         .set_validator_gas_limit(&validator_pubkey, request.gas_limit)
                         .map_err(|e| {
                             warp_utils::reject::custom_server_error(format!(
@@ -1035,10 +1035,11 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .and(validator_store_filter.clone())
         .then(
             |validator_pubkey: PublicKey, validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if validator_store
                         .initialized_validators()
                         .read()
+                        .await
                         .is_enabled(&validator_pubkey)
                         .is_none()
                     {
@@ -1050,6 +1051,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                     validator_store
                         .initialized_validators()
                         .write()
+                        .await
                         .delete_validator_gas_limit(&validator_pubkey)
                         .map_err(|e| {
                             warp_utils::reject::custom_server_error(format!(
@@ -1109,8 +1111,9 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
             |pubkey: PublicKey,
              validator_store: Arc<LighthouseValidatorStore<T, E>>,
              graffiti_flag: Option<Graffiti>| {
-                blocking_json_task(move || {
-                    let graffiti = get_graffiti(pubkey.clone(), validator_store, graffiti_flag)?;
+                async_json_task(async move {
+                    let graffiti =
+                        get_graffiti(pubkey.clone(), validator_store, graffiti_flag).await?;
                     Ok(GenericResponse::from(GetGraffitiResponse {
                         pubkey: pubkey.into(),
                         graffiti,
@@ -1133,14 +1136,14 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
              query: SetGraffitiRequest,
              validator_store: Arc<LighthouseValidatorStore<T, E>>,
              graffiti_file: Option<GraffitiFile>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if graffiti_file.is_some() {
                         return Err(warp_utils::reject::invalid_auth(
                             "Unable to update graffiti as the \"--graffiti-file\" flag is set"
                                 .to_string(),
                         ));
                     }
-                    set_graffiti(pubkey.clone(), query.graffiti, validator_store)
+                    set_graffiti(pubkey.clone(), query.graffiti, validator_store).await
                 })
             },
         )
@@ -1158,14 +1161,14 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
             |pubkey: PublicKey,
              validator_store: Arc<LighthouseValidatorStore<T, E>>,
              graffiti_file: Option<GraffitiFile>| {
-                blocking_json_task(move || {
+                async_json_task(async move {
                     if graffiti_file.is_some() {
                         return Err(warp_utils::reject::invalid_auth(
                             "Unable to delete graffiti as the \"--graffiti-file\" flag is set"
                                 .to_string(),
                         ));
                     }
-                    delete_graffiti(pubkey.clone(), validator_store)
+                    delete_graffiti(pubkey.clone(), validator_store).await
                 })
             },
         )
@@ -1174,7 +1177,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
     // GET /eth/v1/keystores
     let get_std_keystores = std_keystores.and(validator_store_filter.clone()).then(
         |validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-            blocking_json_task(move || Ok(keystores::list(validator_store)))
+            async_json_task(async move { Ok(keystores::list(validator_store).await) })
         },
     );
 
@@ -1188,7 +1191,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
         .then(
             move |request, validator_dir, secrets_dir, validator_store, task_executor| {
                 let secrets_dir = store_passwords_in_secrets_dir.then_some(secrets_dir);
-                blocking_json_task(move || {
+                async_json_task(async move {
                     keystores::import::<_, E>(
                         request,
                         validator_dir,
@@ -1196,6 +1199,7 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
                         validator_store,
                         task_executor,
                     )
+                    .await
                 })
             },
         );
@@ -1204,15 +1208,14 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
     let delete_std_keystores = std_keystores
         .and(warp::body::json())
         .and(validator_store_filter.clone())
-        .and(task_executor_filter.clone())
-        .then(|request, validator_store, task_executor| {
-            blocking_json_task(move || keystores::delete(request, validator_store, task_executor))
+        .then(|request, validator_store| {
+            async_json_task(async move { keystores::delete(request, validator_store).await })
         });
 
     // GET /eth/v1/remotekeys
     let get_std_remotekeys = std_remotekeys.and(validator_store_filter.clone()).then(
         |validator_store: Arc<LighthouseValidatorStore<T, E>>| {
-            blocking_json_task(move || Ok(remotekeys::list(validator_store)))
+            async_json_task(async move { Ok(remotekeys::list(validator_store).await) })
         },
     );
 
@@ -1220,20 +1223,18 @@ pub fn serve<T: 'static + SlotClock + Clone, E: EthSpec>(
     let post_std_remotekeys = std_remotekeys
         .and(warp::body::json())
         .and(validator_store_filter.clone())
-        .and(task_executor_filter.clone())
-        .then(|request, validator_store, task_executor| {
-            blocking_json_task(move || {
-                remotekeys::import::<_, E>(request, validator_store, task_executor)
-            })
+        .then(|request, validator_store| {
+            async_json_task(
+                async move { remotekeys::import::<_, E>(request, validator_store).await },
+            )
         });
 
     // DELETE /eth/v1/remotekeys
     let delete_std_remotekeys = std_remotekeys
         .and(warp::body::json())
         .and(validator_store_filter)
-        .and(task_executor_filter)
-        .then(|request, validator_store, task_executor| {
-            blocking_json_task(move || remotekeys::delete(request, validator_store, task_executor))
+        .then(|request, validator_store| {
+            async_json_task(async move { remotekeys::delete(request, validator_store).await })
         });
 
     // Subscribe to get VC logs via Server side events

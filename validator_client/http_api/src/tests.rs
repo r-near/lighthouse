@@ -19,7 +19,6 @@ use eth2::{
 };
 use eth2_keystore::KeystoreBuilder;
 use lighthouse_validator_store::{Config as ValidatorStoreConfig, LighthouseValidatorStore};
-use parking_lot::RwLock;
 use sensitive_url::SensitiveUrl;
 use slashing_protection::{SlashingDatabase, SLASHING_PROTECTION_FILENAME};
 use slot_clock::{SlotClock, TestingSlotClock};
@@ -30,6 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use task_executor::test_utils::TestRuntime;
 use tempfile::{tempdir, TempDir};
+use tokio::sync::RwLock;
 use types::graffiti::GraffitiString;
 use validator_store::ValidatorStore;
 use zeroize::Zeroizing;
@@ -104,6 +104,7 @@ impl ApiTester {
 
         validator_store
             .register_all_in_doppelganger_protection_if_enabled()
+            .await
             .expect("Should attach doppelganger service");
 
         let initialized_validators = validator_store.initialized_validators();
@@ -243,27 +244,27 @@ impl ApiTester {
 
         self
     }
-    pub fn vals_total(&self) -> usize {
-        self.initialized_validators.read().num_total()
+    pub async fn vals_total(&self) -> usize {
+        self.initialized_validators.read().await.num_total()
     }
 
-    pub fn vals_enabled(&self) -> usize {
-        self.initialized_validators.read().num_enabled()
+    pub async fn vals_enabled(&self) -> usize {
+        self.initialized_validators.read().await.num_enabled()
     }
 
-    pub fn assert_enabled_validators_count(self, count: usize) -> Self {
-        assert_eq!(self.vals_enabled(), count);
+    pub async fn assert_enabled_validators_count(self, count: usize) -> Self {
+        assert_eq!(self.vals_enabled().await, count);
         self
     }
 
-    pub fn assert_validators_count(self, count: usize) -> Self {
-        assert_eq!(self.vals_total(), count);
+    pub async fn assert_validators_count(self, count: usize) -> Self {
+        assert_eq!(self.vals_total().await, count);
         self
     }
 
     pub async fn create_hd_validators(self, s: HdValidatorScenario) -> Self {
-        let initial_vals = self.vals_total();
-        let initial_enabled_vals = self.vals_enabled();
+        let initial_vals = self.vals_total().await;
+        let initial_enabled_vals = self.vals_enabled().await;
 
         let validators = (0..s.count)
             .map(|i| ValidatorRequest {
@@ -309,15 +310,15 @@ impl ApiTester {
         };
 
         assert_eq!(response.len(), s.count);
-        assert_eq!(self.vals_total(), initial_vals + s.count);
+        assert_eq!(self.vals_total().await, initial_vals + s.count);
         assert_eq!(
-            self.vals_enabled(),
+            self.vals_enabled().await,
             initial_enabled_vals + s.count - s.disabled.len()
         );
 
         let server_vals = self.client.get_lighthouse_validators().await.unwrap().data;
 
-        assert_eq!(server_vals.len(), self.vals_total());
+        assert_eq!(server_vals.len(), self.vals_total().await);
 
         // Ensure the server lists all of these newly created validators.
         for validator in &response {
@@ -386,8 +387,8 @@ impl ApiTester {
     }
 
     pub async fn create_keystore_validators(self, s: KeystoreValidatorScenario) -> Self {
-        let initial_vals = self.vals_total();
-        let initial_enabled_vals = self.vals_enabled();
+        let initial_vals = self.vals_total().await;
+        let initial_enabled_vals = self.vals_enabled().await;
 
         let password = random_password();
         let keypair = Keypair::random();
@@ -442,12 +443,15 @@ impl ApiTester {
 
         let num_enabled = s.enabled as usize;
 
-        assert_eq!(self.vals_total(), initial_vals + 1);
-        assert_eq!(self.vals_enabled(), initial_enabled_vals + num_enabled);
+        assert_eq!(self.vals_total().await, initial_vals + 1);
+        assert_eq!(
+            self.vals_enabled().await,
+            initial_enabled_vals + num_enabled
+        );
 
         let server_vals = self.client.get_lighthouse_validators().await.unwrap().data;
 
-        assert_eq!(server_vals.len(), self.vals_total());
+        assert_eq!(server_vals.len(), self.vals_total().await);
 
         assert_eq!(response.voting_pubkey, keypair.pk.into());
         assert_eq!(response.enabled, s.enabled);
@@ -486,11 +490,11 @@ impl ApiTester {
             .await
             .unwrap();
 
-        assert_eq!(self.vals_total(), initial_vals + s.count);
+        assert_eq!(self.vals_total().await, initial_vals + s.count);
         if s.enabled {
-            assert_eq!(self.vals_enabled(), initial_enabled_vals + s.count);
+            assert_eq!(self.vals_enabled().await, initial_enabled_vals + s.count);
         } else {
-            assert_eq!(self.vals_enabled(), initial_enabled_vals);
+            assert_eq!(self.vals_enabled().await, initial_enabled_vals);
         };
 
         self
@@ -501,6 +505,7 @@ impl ApiTester {
         // manually setting validator index in `ValidatorStore`
         self.initialized_validators
             .write()
+            .await
             .set_index(&validator.voting_pubkey, 0);
 
         let expected_exit_epoch = maybe_epoch.unwrap_or_else(|| self.get_current_epoch());
@@ -542,6 +547,7 @@ impl ApiTester {
         assert_eq!(
             self.initialized_validators
                 .read()
+                .await
                 .is_enabled(&validator.voting_pubkey.decompress().unwrap())
                 .unwrap(),
             enabled
@@ -596,7 +602,9 @@ impl ApiTester {
         let validator = &self.client.get_lighthouse_validators().await.unwrap().data[index];
 
         assert_eq!(
-            self.validator_store.get_gas_limit(&validator.voting_pubkey),
+            self.validator_store
+                .get_gas_limit(&validator.voting_pubkey)
+                .await,
             gas_limit
         );
 
@@ -669,7 +677,8 @@ impl ApiTester {
 
         assert_eq!(
             self.validator_store
-                .get_builder_proposals_testing_only(&validator.voting_pubkey),
+                .get_builder_proposals_testing_only(&validator.voting_pubkey)
+                .await,
             builder_proposals
         );
 
@@ -685,7 +694,8 @@ impl ApiTester {
 
         assert_eq!(
             self.validator_store
-                .get_builder_boost_factor_testing_only(&validator.voting_pubkey),
+                .get_builder_boost_factor_testing_only(&validator.voting_pubkey)
+                .await,
             builder_boost_factor
         );
 
@@ -701,17 +711,22 @@ impl ApiTester {
 
         assert_eq!(
             self.validator_store
-                .determine_builder_boost_factor(&validator.voting_pubkey),
+                .determine_builder_boost_factor(&validator.voting_pubkey)
+                .await,
             builder_boost_factor
         );
 
         self
     }
 
-    pub fn assert_default_builder_boost_factor(self, builder_boost_factor: Option<u64>) -> Self {
+    pub async fn assert_default_builder_boost_factor(
+        self,
+        builder_boost_factor: Option<u64>,
+    ) -> Self {
         assert_eq!(
             self.validator_store
-                .determine_builder_boost_factor(&PublicKeyBytes::empty()),
+                .determine_builder_boost_factor(&PublicKeyBytes::empty())
+                .await,
             builder_boost_factor
         );
 
@@ -727,7 +742,8 @@ impl ApiTester {
 
         assert_eq!(
             self.validator_store
-                .get_prefer_builder_proposals_testing_only(&validator.voting_pubkey),
+                .get_prefer_builder_proposals_testing_only(&validator.voting_pubkey)
+                .await,
             prefer_builder_proposals
         );
 
@@ -757,7 +773,9 @@ impl ApiTester {
         let validator = &self.client.get_lighthouse_validators().await.unwrap().data[index];
         let graffiti_str = GraffitiString::from_str(graffiti).unwrap();
         assert_eq!(
-            self.validator_store.graffiti(&validator.voting_pubkey),
+            self.validator_store
+                .graffiti(&validator.voting_pubkey)
+                .await,
             Some(graffiti_str.into())
         );
 

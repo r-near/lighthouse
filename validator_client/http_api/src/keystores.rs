@@ -16,7 +16,6 @@ use slot_clock::SlotClock;
 use std::path::PathBuf;
 use std::sync::Arc;
 use task_executor::TaskExecutor;
-use tokio::runtime::Handle;
 use tracing::{info, warn};
 use types::{EthSpec, PublicKeyBytes};
 use validator_dir::{keystore_password_path, Builder as ValidatorDirBuilder};
@@ -24,11 +23,11 @@ use warp::Rejection;
 use warp_utils::reject::{custom_bad_request, custom_server_error};
 use zeroize::Zeroizing;
 
-pub fn list<T: SlotClock + 'static, E: EthSpec>(
+pub async fn list<T: SlotClock + 'static, E: EthSpec>(
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
 ) -> ListKeystoresResponse {
     let initialized_validators_rwlock = validator_store.initialized_validators();
-    let initialized_validators = initialized_validators_rwlock.read();
+    let initialized_validators = initialized_validators_rwlock.read().await;
 
     let keystores = initialized_validators
         .validator_definitions()
@@ -58,12 +57,12 @@ pub fn list<T: SlotClock + 'static, E: EthSpec>(
     ListKeystoresResponse { data: keystores }
 }
 
-pub fn import<T: SlotClock + 'static, E: EthSpec>(
+pub async fn import<T: SlotClock + 'static, E: EthSpec>(
     request: ImportKeystoresRequest,
     validator_dir: PathBuf,
     secrets_dir: Option<PathBuf>,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
-    task_executor: TaskExecutor,
+    _task_executor: TaskExecutor,
 ) -> Result<ImportKeystoresResponse, Rejection> {
     // Check request validity. This is the only cases in which we should return a 4xx code.
     if request.keystores.len() != request.passwords.len() {
@@ -115,7 +114,7 @@ pub fn import<T: SlotClock + 'static, E: EthSpec>(
                 ImportKeystoreStatus::Error,
                 format!("slashing protection import failed: {:?}", e),
             )
-        } else if let Some(handle) = task_executor.handle() {
+        } else {
             // Import the keystore.
             match import_single_keystore::<_, E>(
                 keystore,
@@ -123,8 +122,9 @@ pub fn import<T: SlotClock + 'static, E: EthSpec>(
                 validator_dir.clone(),
                 secrets_dir.clone(),
                 &validator_store,
-                handle,
-            ) {
+            )
+            .await
+            {
                 Ok(status) => Status::ok(status),
                 Err(e) => {
                     warn!(
@@ -135,11 +135,6 @@ pub fn import<T: SlotClock + 'static, E: EthSpec>(
                     Status::error(ImportKeystoreStatus::Error, e)
                 }
             }
-        } else {
-            Status::error(
-                ImportKeystoreStatus::Error,
-                "validator client shutdown".into(),
-            )
         };
         statuses.push(status);
     }
@@ -159,13 +154,12 @@ pub fn import<T: SlotClock + 'static, E: EthSpec>(
     Ok(ImportKeystoresResponse { data: statuses })
 }
 
-fn import_single_keystore<T: SlotClock + 'static, E: EthSpec>(
+async fn import_single_keystore<T: SlotClock + 'static, E: EthSpec>(
     keystore: Keystore,
     password: Zeroizing<String>,
     validator_dir_path: PathBuf,
     secrets_dir: Option<PathBuf>,
     validator_store: &LighthouseValidatorStore<T, E>,
-    handle: Handle,
 ) -> Result<ImportKeystoreStatus, String> {
     // Check if the validator key already exists, erroring if it is a remote signer validator.
     let pubkey = keystore
@@ -174,6 +168,7 @@ fn import_single_keystore<T: SlotClock + 'static, E: EthSpec>(
     if let Some(def) = validator_store
         .initialized_validators()
         .read()
+        .await
         .validator_definitions()
         .iter()
         .find(|def| def.voting_public_key == pubkey)
@@ -215,8 +210,8 @@ fn import_single_keystore<T: SlotClock + 'static, E: EthSpec>(
     let voting_keystore_path = validator_dir.voting_keystore_path();
     drop(validator_dir);
 
-    handle
-        .block_on(validator_store.add_validator_keystore(
+    validator_store
+        .add_validator_keystore(
             voting_keystore_path,
             password_storage,
             true,
@@ -226,18 +221,18 @@ fn import_single_keystore<T: SlotClock + 'static, E: EthSpec>(
             None,
             None,
             None,
-        ))
+        )
+        .await
         .map_err(|e| format!("failed to initialize validator: {:?}", e))?;
 
     Ok(ImportKeystoreStatus::Imported)
 }
 
-pub fn delete<T: SlotClock + 'static, E: EthSpec>(
+pub async fn delete<T: SlotClock + 'static, E: EthSpec>(
     request: DeleteKeystoresRequest,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
-    task_executor: TaskExecutor,
 ) -> Result<DeleteKeystoresResponse, Rejection> {
-    let export_response = export(request, validator_store, task_executor)?;
+    let export_response = export(request, validator_store).await?;
 
     // Check the status is Deleted to confirm deletion is successful, then only display the log
     let successful_deletion = export_response
@@ -263,49 +258,40 @@ pub fn delete<T: SlotClock + 'static, E: EthSpec>(
     })
 }
 
-pub fn export<T: SlotClock + 'static, E: EthSpec>(
+pub async fn export<T: SlotClock + 'static, E: EthSpec>(
     request: DeleteKeystoresRequest,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
-    task_executor: TaskExecutor,
 ) -> Result<ExportKeystoresResponse, Rejection> {
     // Remove from initialized validators.
     let initialized_validators_rwlock = validator_store.initialized_validators();
-    let mut initialized_validators = initialized_validators_rwlock.write();
+    let mut initialized_validators = initialized_validators_rwlock.write().await;
 
-    let mut responses = request
-        .pubkeys
-        .iter()
-        .map(|pubkey_bytes| {
-            match delete_single_keystore(
-                pubkey_bytes,
-                &mut initialized_validators,
-                task_executor.clone(),
-            ) {
-                Ok(status) => status,
-                Err(error) => {
-                    warn!(
-                        pubkey = ?pubkey_bytes,
-                        ?error,
-                        "Error deleting keystore"
-                    );
-                    SingleExportKeystoresResponse {
-                        status: Status::error(DeleteKeystoreStatus::Error, error),
-                        validating_keystore: None,
-                        validating_keystore_password: None,
-                    }
-                }
+    let mut responses = vec![];
+    for pubkey_bytes in &request.pubkeys {
+        match delete_single_keystore(pubkey_bytes, &mut initialized_validators).await {
+            Ok(status) => responses.push(status),
+            Err(error) => {
+                warn!(
+                    pubkey = ?pubkey_bytes,
+                    ?error,
+                    "Error deleting keystore"
+                );
+                responses.push(SingleExportKeystoresResponse {
+                    status: Status::error(DeleteKeystoreStatus::Error, error),
+                    validating_keystore: None,
+                    validating_keystore_password: None,
+                })
             }
-        })
-        .collect::<Vec<_>>();
+        }
+    }
 
     // Use `update_validators` to update the key cache. It is safe to let the key cache get a bit out
     // of date as it resets when it can't be decrypted. We update it just a single time to avoid
     // continually resetting it after each key deletion.
-    if let Some(handle) = task_executor.handle() {
-        handle
-            .block_on(initialized_validators.update_validators())
-            .map_err(|e| custom_server_error(format!("unable to update key cache: {:?}", e)))?;
-    }
+    initialized_validators
+        .update_validators()
+        .await
+        .map_err(|e| custom_server_error(format!("unable to update key cache: {:?}", e)))?;
 
     // Export the slashing protection data.
     let slashing_protection = validator_store
@@ -332,38 +318,35 @@ pub fn export<T: SlotClock + 'static, E: EthSpec>(
     })
 }
 
-fn delete_single_keystore(
+async fn delete_single_keystore(
     pubkey_bytes: &PublicKeyBytes,
     initialized_validators: &mut InitializedValidators,
-    task_executor: TaskExecutor,
 ) -> Result<SingleExportKeystoresResponse, String> {
-    if let Some(handle) = task_executor.handle() {
-        let pubkey = pubkey_bytes
-            .decompress()
-            .map_err(|e| format!("invalid pubkey, {:?}: {:?}", pubkey_bytes, e))?;
+    let pubkey = pubkey_bytes
+        .decompress()
+        .map_err(|e| format!("invalid pubkey, {:?}: {:?}", pubkey_bytes, e))?;
 
-        match handle.block_on(initialized_validators.delete_definition_and_keystore(&pubkey, true))
-        {
-            Ok(Some(keystore_and_password)) => Ok(SingleExportKeystoresResponse {
-                status: Status::ok(DeleteKeystoreStatus::Deleted),
-                validating_keystore: Some(KeystoreJsonStr(keystore_and_password.keystore)),
-                validating_keystore_password: keystore_and_password.password,
-            }),
-            Ok(None) => Ok(SingleExportKeystoresResponse {
-                status: Status::ok(DeleteKeystoreStatus::Deleted),
+    match initialized_validators
+        .delete_definition_and_keystore(&pubkey, true)
+        .await
+    {
+        Ok(Some(keystore_and_password)) => Ok(SingleExportKeystoresResponse {
+            status: Status::ok(DeleteKeystoreStatus::Deleted),
+            validating_keystore: Some(KeystoreJsonStr(keystore_and_password.keystore)),
+            validating_keystore_password: keystore_and_password.password,
+        }),
+        Ok(None) => Ok(SingleExportKeystoresResponse {
+            status: Status::ok(DeleteKeystoreStatus::Deleted),
+            validating_keystore: None,
+            validating_keystore_password: None,
+        }),
+        Err(e) => match e {
+            Error::ValidatorNotInitialized(_) => Ok(SingleExportKeystoresResponse {
+                status: Status::ok(DeleteKeystoreStatus::NotFound),
                 validating_keystore: None,
                 validating_keystore_password: None,
             }),
-            Err(e) => match e {
-                Error::ValidatorNotInitialized(_) => Ok(SingleExportKeystoresResponse {
-                    status: Status::ok(DeleteKeystoreStatus::NotFound),
-                    validating_keystore: None,
-                    validating_keystore_password: None,
-                }),
-                _ => Err(format!("unable to disable and delete: {:?}", e)),
-            },
-        }
-    } else {
-        Err("validator client shutdown".into())
+            _ => Err(format!("unable to disable and delete: {:?}", e)),
+        },
     }
 }

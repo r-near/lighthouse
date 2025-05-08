@@ -254,7 +254,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
 
     /// Prepare proposer preparations and send to beacon node
     async fn prepare_proposers_and_publish(&self, spec: &ChainSpec) -> Result<(), String> {
-        let preparation_data = self.collect_preparation_data(spec);
+        let preparation_data = self.collect_preparation_data(spec).await;
         if !preparation_data.is_empty() {
             self.publish_preparation_data(preparation_data).await?;
         }
@@ -262,7 +262,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
         Ok(())
     }
 
-    fn collect_preparation_data(&self, spec: &ChainSpec) -> Vec<ProposerPreparationData> {
+    async fn collect_preparation_data(&self, spec: &ChainSpec) -> Vec<ProposerPreparationData> {
         self.collect_proposal_data(|pubkey, proposal_data| {
             if let Some(fee_recipient) = proposal_data.fee_recipient {
                 Some(ProposerPreparationData {
@@ -281,9 +281,10 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
                 None
             }
         })
+        .await
     }
 
-    fn collect_validator_registration_keys(&self) -> Vec<ValidatorRegistrationKey> {
+    async fn collect_validator_registration_keys(&self) -> Vec<ValidatorRegistrationKey> {
         self.collect_proposal_data(|pubkey, proposal_data| {
             // Ignore fee recipients for keys without indices, they are inactive.
             proposal_data.validator_index?;
@@ -300,6 +301,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
                     })
             })
         })
+        .await
     }
 
     async fn collect_proposal_data<G, U>(&self, map_fn: G) -> Vec<U>
@@ -311,13 +313,15 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
             .voting_pubkeys(DoppelgangerStatus::ignored)
             .await;
 
-        let mut proposal_data = Vec::with_capacity(all_pubkeys.len());
+        let mut results = Vec::with_capacity(all_pubkeys.len());
         for pubkey in all_pubkeys {
-            if let Some(proposal_data) = self.validator_store.proposal_data(&pubkey).await? {
-                proposal_data.push(map_fn(pubkey, proposal_data));
+            if let Some(proposal_data) = self.validator_store.proposal_data(&pubkey).await {
+                if let Some(u) = map_fn(pubkey, proposal_data) {
+                    results.push(u);
+                }
             }
         }
-        proposal_data
+        results
     }
 
     async fn publish_preparation_data(
@@ -350,7 +354,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
 
     /// Register validators with builders, used in the blinded block proposal flow.
     async fn register_validators(&self) -> Result<(), String> {
-        let registration_keys = self.collect_validator_registration_keys();
+        let registration_keys = self.collect_validator_registration_keys().await;
 
         let mut changed_keys = vec![];
 

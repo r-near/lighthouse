@@ -4,13 +4,13 @@ use slot_clock::SlotClock;
 use std::sync::Arc;
 use types::{graffiti::GraffitiString, EthSpec, Graffiti};
 
-pub fn get_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
+pub async fn get_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
     validator_pubkey: PublicKey,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
     graffiti_flag: Option<Graffiti>,
 ) -> Result<Graffiti, warp::Rejection> {
     let initialized_validators_rw_lock = validator_store.initialized_validators();
-    let initialized_validators = initialized_validators_rw_lock.read();
+    let initialized_validators = initialized_validators_rw_lock.read().await;
     match initialized_validators.validator(&validator_pubkey.compress()) {
         None => Err(warp_utils::reject::custom_not_found(
             "The key was not found on the server".to_string(),
@@ -26,13 +26,13 @@ pub fn get_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
     }
 }
 
-pub fn set_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
+pub async fn set_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
     validator_pubkey: PublicKey,
     graffiti: GraffitiString,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
 ) -> Result<(), warp::Rejection> {
     let initialized_validators_rw_lock = validator_store.initialized_validators();
-    let mut initialized_validators = initialized_validators_rw_lock.write();
+    let mut initialized_validators = initialized_validators_rw_lock.write().await;
     match initialized_validators.validator(&validator_pubkey.compress()) {
         None => Err(warp_utils::reject::custom_not_found(
             "The key was not found on the server, nothing to update".to_string(),
@@ -53,12 +53,12 @@ pub fn set_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
     }
 }
 
-pub fn delete_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
+pub async fn delete_graffiti<T: 'static + SlotClock + Clone, E: EthSpec>(
     validator_pubkey: PublicKey,
     validator_store: Arc<LighthouseValidatorStore<T, E>>,
 ) -> Result<(), warp::Rejection> {
     let initialized_validators_rw_lock = validator_store.initialized_validators();
-    let mut initialized_validators = initialized_validators_rw_lock.write();
+    let mut initialized_validators = initialized_validators_rw_lock.write().await;
     match initialized_validators.validator(&validator_pubkey.compress()) {
         None => Err(warp_utils::reject::custom_not_found(
             "The key was not found on the server, nothing to delete".to_string(),
