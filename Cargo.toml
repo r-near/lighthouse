@@ -292,7 +292,13 @@ warp_utils = { path = "common/warp_utils" }
 xdelta3 = { git = "http://github.com/sigp/xdelta3-rs", rev = "4db64086bb02e9febb584ba93b9d16bb2ae3825a" }
 zstd = "0.13"
 
+[profile.release]
+# Turn on debug symbols for release builds, as they have minimal impact on performance yet are
+# incredibly useful for debugging test failures and testnet issues.
+debug = true
+
 [profile.maxperf]
+debug = false
 inherits = "release"
 lto = "fat"
 codegen-units = 1
