@@ -1579,7 +1579,7 @@ pub fn cli_app() -> Command {
                 .help("Specifies the length of the inbound event queue. \
                         Higher values may prevent messages from being dropped while lower values \
                         may help protect the node from becoming overwhelmed.")
-                .default_value("16384")
+                .default_value("32768")
                 .hide(true)
                 .action(ArgAction::Set)
                 .display_order(0)
