@@ -58,8 +58,7 @@ pub struct HotColdDB<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> {
     /// The starting slots for the range of data columns stored in the database.
     data_column_info: RwLock<DataColumnInfo>,
     pub(crate) config: StoreConfig,
-    pub(crate) hierarchy: HierarchyModuli,
-    pub hierarchy_hot: HierarchyModuli,
+    pub hierarchy: HierarchyModuli,
     /// Cold database containing compact historical data.
     pub cold_db: Cold,
     /// Database containing blobs. If None, store falls back to use `cold_db`.
@@ -209,11 +208,9 @@ impl<E: EthSpec> HotColdDB<E, MemoryStore<E>, MemoryStore<E>> {
         config.verify::<E>()?;
 
         let hierarchy = config.hierarchy_config.to_moduli()?;
-        // TODO(hdiff): Use different exponents
+
         // NOTE: Anchor slot is initialized to 0, which is only valid for new DBs. We shouldn't
         // be reusing memory stores, but if we want to do that we should redo this.
-        let hierarchy_hot = config.hierarchy_config.to_moduli()?;
-
         let db = HotColdDB {
             split: RwLock::new(Split::default()),
             anchor_info: RwLock::new(ANCHOR_UNINITIALIZED),
@@ -233,7 +230,6 @@ impl<E: EthSpec> HotColdDB<E, MemoryStore<E>, MemoryStore<E>> {
             )),
             config,
             hierarchy,
-            hierarchy_hot,
             spec,
             _phantom: PhantomData,
         };
@@ -260,9 +256,6 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
 
         let hierarchy = config.hierarchy_config.to_moduli()?;
 
-        // TODO(hdiff): Use different exponents
-        let hierarchy_hot = config.hierarchy_config.to_moduli()?;
-
         debug!(?hot_path, "Opening LevelDB");
         let hot_db = BeaconNodeBackend::open(&config, hot_path)?;
 
@@ -288,7 +281,6 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
             )),
             config,
             hierarchy,
-            hierarchy_hot,
             spec,
             _phantom: PhantomData,
         };
@@ -451,7 +443,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
     pub fn hot_storage_strategy(&self, slot: Slot) -> Result<StorageStrategy, Error> {
         Ok(self
-            .hierarchy_hot
+            .hierarchy
             .storage_strategy(slot, self.hot_hdiff_start_slot()?)?)
     }
 

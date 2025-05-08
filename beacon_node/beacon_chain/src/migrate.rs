@@ -632,7 +632,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
         // Compute the set of finalized state roots that we must keep to make the dynamic HDiff system
         // work.
         let required_finalized_diff_state_slots = store
-            .hierarchy_hot
+            .hierarchy
             .closest_layer_points(new_finalized_slot, store.hot_hdiff_start_slot()?);
 
         // We don't know which blocks are shared among abandoned chains, so we buffer and delete
