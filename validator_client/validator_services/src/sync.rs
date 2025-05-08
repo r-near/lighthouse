@@ -308,13 +308,18 @@ pub async fn poll_sync_committee_duties<S: ValidatorStore + 'static, T: SlotCloc
     // protection.
     let local_pubkeys: HashSet<_> = duties_service
         .validator_store
-        .voting_pubkeys(DoppelgangerStatus::ignored);
+        .voting_pubkeys(DoppelgangerStatus::ignored)
+        .await;
 
     let local_indices = {
         let mut local_indices = Vec::with_capacity(local_pubkeys.len());
 
         for &pubkey in &local_pubkeys {
-            if let Some(validator_index) = duties_service.validator_store.validator_index(&pubkey) {
+            if let Some(validator_index) = duties_service
+                .validator_store
+                .validator_index(&pubkey)
+                .await
+            {
                 local_indices.push(validator_index)
             }
         }

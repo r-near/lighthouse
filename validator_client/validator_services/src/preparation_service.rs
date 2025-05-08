@@ -302,21 +302,22 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> PreparationService<S, 
         })
     }
 
-    fn collect_proposal_data<G, U>(&self, map_fn: G) -> Vec<U>
+    async fn collect_proposal_data<G, U>(&self, map_fn: G) -> Vec<U>
     where
         G: Fn(PublicKeyBytes, ProposalData) -> Option<U>,
     {
         let all_pubkeys: Vec<_> = self
             .validator_store
-            .voting_pubkeys(DoppelgangerStatus::ignored);
+            .voting_pubkeys(DoppelgangerStatus::ignored)
+            .await;
 
-        all_pubkeys
-            .into_iter()
-            .filter_map(|pubkey| {
-                let proposal_data = self.validator_store.proposal_data(&pubkey)?;
-                map_fn(pubkey, proposal_data)
-            })
-            .collect()
+        let mut proposal_data = Vec::with_capacity(all_pubkeys.len());
+        for pubkey in all_pubkeys {
+            if let Some(proposal_data) = self.validator_store.proposal_data(&pubkey).await? {
+                proposal_data.push(map_fn(pubkey, proposal_data));
+            }
+        }
+        proposal_data
     }
 
     async fn publish_preparation_data(

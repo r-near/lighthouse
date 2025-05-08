@@ -341,16 +341,17 @@ pub struct DutiesService<S, T> {
 
 impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     /// Returns the total number of validators known to the duties service.
-    pub fn total_validator_count(&self) -> usize {
-        self.validator_store.num_voting_validators()
+    pub async fn total_validator_count(&self) -> usize {
+        self.validator_store.num_voting_validators().await
     }
 
     /// Returns the total number of validators that should propose in the given epoch.
-    pub fn proposer_count(&self, epoch: Epoch) -> usize {
+    pub async fn proposer_count(&self, epoch: Epoch) -> usize {
         // Only collect validators that are considered safe in terms of doppelganger protection.
         let signing_pubkeys: HashSet<_> = self
             .validator_store
-            .voting_pubkeys(DoppelgangerStatus::only_safe);
+            .voting_pubkeys(DoppelgangerStatus::only_safe)
+            .await;
 
         self.proposers
             .read()
@@ -364,11 +365,12 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     }
 
     /// Returns the total number of validators that should attest in the given epoch.
-    pub fn attester_count(&self, epoch: Epoch) -> usize {
+    pub async fn attester_count(&self, epoch: Epoch) -> usize {
         // Only collect validators that are considered safe in terms of doppelganger protection.
         let signing_pubkeys: HashSet<_> = self
             .validator_store
-            .voting_pubkeys(DoppelgangerStatus::only_safe);
+            .voting_pubkeys(DoppelgangerStatus::only_safe)
+            .await;
         self.attesters
             .read()
             .iter()
@@ -379,9 +381,10 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     }
 
     /// Returns the total number of validators that are in a doppelganger detection period.
-    pub fn doppelganger_detecting_count(&self) -> usize {
+    pub async fn doppelganger_detecting_count(&self) -> usize {
         self.validator_store
             .voting_pubkeys::<HashSet<_>, _>(DoppelgangerStatus::only_unsafe)
+            .await
             .len()
     }
 
@@ -389,13 +392,14 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     ///
     /// It is possible that multiple validators have an identical proposal slot, however that is
     /// likely the result of heavy forking (lol) or inconsistent beacon node connections.
-    pub fn block_proposers(&self, slot: Slot) -> HashSet<PublicKeyBytes> {
+    pub async fn block_proposers(&self, slot: Slot) -> HashSet<PublicKeyBytes> {
         let epoch = slot.epoch(S::E::slots_per_epoch());
 
         // Only collect validators that are considered safe in terms of doppelganger protection.
         let signing_pubkeys: HashSet<_> = self
             .validator_store
-            .voting_pubkeys(DoppelgangerStatus::only_safe);
+            .voting_pubkeys(DoppelgangerStatus::only_safe)
+            .await;
 
         self.proposers
             .read()
@@ -414,13 +418,14 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     }
 
     /// Returns all `ValidatorDuty` for the given `slot`.
-    pub fn attesters(&self, slot: Slot) -> Vec<DutyAndProof> {
+    pub async fn attesters(&self, slot: Slot) -> Vec<DutyAndProof> {
         let epoch = slot.epoch(S::E::slots_per_epoch());
 
         // Only collect validators that are considered safe in terms of doppelganger protection.
         let signing_pubkeys: HashSet<_> = self
             .validator_store
-            .voting_pubkeys(DoppelgangerStatus::only_safe);
+            .voting_pubkeys(DoppelgangerStatus::only_safe)
+            .await;
 
         self.attesters
             .read()
@@ -436,9 +441,9 @@ impl<S: ValidatorStore, T: SlotClock + 'static> DutiesService<S, T> {
     }
 
     /// Returns `true` if we should collect per validator metrics and `false` otherwise.
-    pub fn per_validator_metrics(&self) -> bool {
+    pub async fn per_validator_metrics(&self) -> bool {
         self.enable_high_validator_count_metrics
-            || self.total_validator_count() <= VALIDATOR_METRICS_MIN_COUNT
+            || self.total_validator_count().await <= VALIDATOR_METRICS_MIN_COUNT
     }
 }
 
@@ -586,13 +591,15 @@ async fn poll_validator_indices<S: ValidatorStore, T: SlotClock + 'static>(
     // collect those indices.
     let all_pubkeys: Vec<_> = duties_service
         .validator_store
-        .voting_pubkeys(DoppelgangerStatus::ignored);
+        .voting_pubkeys(DoppelgangerStatus::ignored)
+        .await;
 
     for pubkey in all_pubkeys {
         // This is on its own line to avoid some weirdness with locks and if statements.
         let is_known = duties_service
             .validator_store
             .validator_index(&pubkey)
+            .await
             .is_some();
 
         if !is_known {
@@ -634,6 +641,7 @@ async fn poll_validator_indices<S: ValidatorStore, T: SlotClock + 'static>(
             let fee_recipient = duties_service
                 .validator_store
                 .get_fee_recipient(&pubkey)
+                .await
                 .map(|fr| fr.to_string())
                 .unwrap_or_else(|| {
                     "Fee recipient for validator not set in validator_definitions.yml \
@@ -713,13 +721,18 @@ async fn poll_beacon_attesters<S: ValidatorStore + 'static, T: SlotClock + 'stat
     // and get more information about other running instances.
     let local_pubkeys: HashSet<_> = duties_service
         .validator_store
-        .voting_pubkeys(DoppelgangerStatus::ignored);
+        .voting_pubkeys(DoppelgangerStatus::ignored)
+        .await;
 
     let local_indices = {
         let mut local_indices = Vec::with_capacity(local_pubkeys.len());
 
         for &pubkey in &local_pubkeys {
-            if let Some(validator_index) = duties_service.validator_store.validator_index(&pubkey) {
+            if let Some(validator_index) = duties_service
+                .validator_store
+                .validator_index(&pubkey)
+                .await
+            {
                 local_indices.push(validator_index)
             }
         }
@@ -906,7 +919,7 @@ async fn poll_beacon_attesters_for_epoch<S: ValidatorStore + 'static, T: SlotClo
     // determine whether validator duties need to be updated. This is to ensure that we don't
     // request for extra data unless necessary in order to save on network bandwidth.
     let uninitialized_validators =
-        get_uninitialized_validators(duties_service, &epoch, local_pubkeys);
+        get_uninitialized_validators(duties_service, &epoch, local_pubkeys).await;
     let initial_indices_to_request = if !uninitialized_validators.is_empty() {
         uninitialized_validators.as_slice()
     } else {
@@ -940,11 +953,15 @@ async fn poll_beacon_attesters_for_epoch<S: ValidatorStore + 'static, T: SlotClo
 
     // Make a request for all indices that require updating which we have not already made a request
     // for.
-    let indices_to_request = validators_to_update
-        .iter()
-        .filter_map(|pubkey| duties_service.validator_store.validator_index(pubkey))
-        .filter(|validator_index| !initial_indices_to_request.contains(validator_index))
-        .collect::<Vec<_>>();
+    let mut indices_to_request = vec![];
+    for pubkey in &validators_to_update {
+        if let Some(validator_index) = duties_service.validator_store.validator_index(pubkey).await
+        {
+            if !initial_indices_to_request.contains(&validator_index) {
+                indices_to_request.push(validator_index);
+            }
+        }
+    }
 
     // Filter the initial duties by their relevance so that we don't hit the warning below about
     // overwriting duties. There was previously a bug here.
@@ -1041,29 +1058,39 @@ async fn poll_beacon_attesters_for_epoch<S: ValidatorStore + 'static, T: SlotClo
 }
 
 /// Get a filtered list of local validators for which we don't already know their duties for that epoch
-fn get_uninitialized_validators<S: ValidatorStore, T: SlotClock + 'static>(
+async fn get_uninitialized_validators<S: ValidatorStore, T: SlotClock + 'static>(
     duties_service: &Arc<DutiesService<S, T>>,
     epoch: &Epoch,
     local_pubkeys: &HashSet<PublicKeyBytes>,
 ) -> Vec<u64> {
-    let attesters = duties_service.attesters.read();
-    local_pubkeys
-        .iter()
-        .filter(|pubkey| {
-            attesters
-                .get(pubkey)
-                .is_none_or(|duties| !duties.contains_key(epoch))
-        })
-        .filter_map(|pubkey| duties_service.validator_store.validator_index(pubkey))
-        .collect::<Vec<_>>()
+    // Allocate a temporary vec to prevent holding two locks simultaneously (deadlock risk if we use
+    // a different lock order in another function).
+    let uninitialized_pubkeys = {
+        let attesters = duties_service.attesters.read();
+        local_pubkeys
+            .iter()
+            .filter(|pubkey| {
+                attesters
+                    .get(pubkey)
+                    .is_none_or(|duties| !duties.contains_key(epoch))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut uninitialized_indices = Vec::with_capacity(uninitialized_pubkeys.len());
+    for pubkey in uninitialized_pubkeys {
+        if let Some(index) = duties_service.validator_store.validator_index(pubkey).await {
+            uninitialized_indices.push(index);
+        }
+    }
+    uninitialized_indices
 }
 
-fn update_per_validator_duty_metrics<S: ValidatorStore, T: SlotClock + 'static>(
+async fn update_per_validator_duty_metrics<S: ValidatorStore, T: SlotClock + 'static>(
     duties_service: &Arc<DutiesService<S, T>>,
     epoch: Epoch,
     current_slot: Slot,
 ) {
-    if duties_service.per_validator_metrics() {
+    if duties_service.per_validator_metrics().await {
         let attesters = duties_service.attesters.read();
         attesters.values().for_each(|attester_duties_by_epoch| {
             if let Some((_, duty_and_proof)) = attester_duties_by_epoch.get(&epoch) {
@@ -1309,7 +1336,7 @@ async fn poll_beacon_proposers<S: ValidatorStore, T: SlotClock + 'static>(
     // Notify the block proposal service for any proposals that we have in our cache.
     //
     // See the function-level documentation for more information.
-    let initial_block_proposers = duties_service.block_proposers(current_slot);
+    let initial_block_proposers = duties_service.block_proposers(current_slot).await;
     notify_block_production_service::<S>(
         current_slot,
         &initial_block_proposers,
@@ -1324,7 +1351,8 @@ async fn poll_beacon_proposers<S: ValidatorStore, T: SlotClock + 'static>(
     // doppelganger finishes.
     let local_pubkeys: HashSet<_> = duties_service
         .validator_store
-        .voting_pubkeys(DoppelgangerStatus::ignored);
+        .voting_pubkeys(DoppelgangerStatus::ignored)
+        .await;
 
     // Only download duties and push out additional block production events if we have some
     // validators.
@@ -1387,6 +1415,7 @@ async fn poll_beacon_proposers<S: ValidatorStore, T: SlotClock + 'static>(
         // which were not included in the initial notification to the `BlockService`.
         let additional_block_producers = duties_service
             .block_proposers(current_slot)
+            .await
             .difference(&initial_block_proposers)
             .copied()
             .collect::<HashSet<PublicKeyBytes>>();

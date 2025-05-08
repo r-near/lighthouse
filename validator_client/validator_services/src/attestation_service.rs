@@ -163,7 +163,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
                 if let Some(duration_to_next_slot) = self.slot_clock.duration_to_next_slot() {
                     sleep(duration_to_next_slot + slot_duration / 3).await;
 
-                    if let Err(e) = self.spawn_attestation_tasks(slot_duration) {
+                    if let Err(e) = self.spawn_attestation_tasks(slot_duration).await {
                         crit!(error = e, "Failed to spawn attestation tasks")
                     } else {
                         trace!("Spawned attestation tasks");
@@ -183,7 +183,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
 
     /// For each each required attestation, spawn a new task that downloads, signs and uploads the
     /// attestation to the beacon node.
-    fn spawn_attestation_tasks(&self, slot_duration: Duration) -> Result<(), String> {
+    async fn spawn_attestation_tasks(&self, slot_duration: Duration) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
         let duration_to_next_slot = self
             .slot_clock
@@ -197,16 +197,16 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
                 .checked_sub(slot_duration / 3)
                 .unwrap_or_else(|| Duration::from_secs(0));
 
-        let duties_by_committee_index: HashMap<CommitteeIndex, Vec<DutyAndProof>> = self
-            .duties_service
-            .attesters(slot)
-            .into_iter()
-            .fold(HashMap::new(), |mut map, duty_and_proof| {
-                map.entry(duty_and_proof.duty.committee_index)
-                    .or_default()
-                    .push(duty_and_proof);
-                map
-            });
+        let duties_by_committee_index: HashMap<CommitteeIndex, Vec<DutyAndProof>> =
+            self.duties_service.attesters(slot).await.into_iter().fold(
+                HashMap::new(),
+                |mut map, duty_and_proof| {
+                    map.entry(duty_and_proof.duty.committee_index)
+                        .or_default()
+                        .push(duty_and_proof);
+                    map
+                },
+            );
 
         // For each committee index for this slot:
         //
@@ -704,11 +704,12 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> AttestationService<S, 
             async move {
                 sleep_until(pruning_instant).await;
 
-                executor.spawn_blocking(
-                    move || {
+                executor.spawn(
+                    async move {
                         attestation_service
                             .validator_store
                             .prune_slashing_protection_db(current_epoch, false)
+                            .await
                     },
                     "slashing_protection_pruning",
                 )

@@ -296,12 +296,12 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
         }
 
         for validator_pubkey in proposers {
-            let builder_boost_factor = self
-                .validator_store
-                .determine_builder_boost_factor(&validator_pubkey);
             let service = self.clone();
             self.inner.executor.spawn(
                 async move {
+                    let builder_boost_factor = service
+                        .validator_store
+                        .determine_builder_boost_factor(&validator_pubkey).await;
                     let result = service
                         .publish_block(slot, validator_pubkey, builder_boost_factor)
                         .await;
@@ -448,13 +448,16 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> BlockService<S, T> {
         let graffiti = determine_graffiti(
             &validator_pubkey,
             self.graffiti_file.clone(),
-            self.validator_store.graffiti(&validator_pubkey),
+            self.validator_store.graffiti(&validator_pubkey).await,
             self.graffiti,
         );
 
         let randao_reveal_ref = &randao_reveal;
         let self_ref = &self;
-        let proposer_index = self.validator_store.validator_index(&validator_pubkey);
+        let proposer_index = self
+            .validator_store
+            .validator_index(&validator_pubkey)
+            .await;
         let proposer_fallback = ProposerFallback {
             beacon_nodes: self.beacon_nodes.clone(),
             proposer_nodes: self.proposer_nodes.clone(),

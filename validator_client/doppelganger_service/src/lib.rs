@@ -883,8 +883,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn unregistered_validator() {
+    #[tokio::test]
+    async fn unregistered_validator() {
         // Non-genesis epoch
         let epoch = genesis_epoch() + 2;
 
@@ -995,7 +995,7 @@ mod test {
                 },
             )
             // All validators should be enabled.
-            .assert_all_enabled();
+            .assert_all_enabled().await;
     }
 
     async fn detect_after_genesis_test<F>(mutate_responses: F)
@@ -1073,8 +1073,8 @@ mod test {
         .await
     }
 
-    #[test]
-    fn register_prior_to_genesis() {
+    #[tokio::test]
+    async fn register_prior_to_genesis() {
         let prior_to_genesis = GENESIS_TIME.checked_sub(SLOT_DURATION).unwrap();
 
         TestBuilder::default()
@@ -1244,8 +1244,8 @@ mod test {
             });
     }
 
-    #[test]
-    fn time_skips_forward_with_doppelgangers() {
+    #[tokio::test]
+    async fn time_skips_forward_with_doppelgangers() {
         let initial_epoch = genesis_epoch() + 1;
         let initial_slot = initial_epoch.start_slot(E::slots_per_epoch());
         let skipped_forward_epoch = initial_epoch + 42;
@@ -1256,6 +1256,7 @@ mod test {
             .set_slot(initial_slot)
             .register_all_in_doppelganger_protection_if_enabled()
             .assert_all_disabled()
+            .await
             // First, simulate a check in the initialization epoch.
             .simulate_detect_doppelgangers(
                 initial_slot,
@@ -1268,6 +1269,7 @@ mod test {
                 },
             )
             .assert_all_disabled()
+            .await
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: initial_epoch + 1,
                 remaining_epochs: DEFAULT_REMAINING_DETECTION_EPOCHS,
@@ -1294,8 +1296,8 @@ mod test {
             });
     }
 
-    #[test]
-    fn time_skips_backward() {
+    #[tokio::test]
+    async fn time_skips_backward() {
         let initial_epoch = genesis_epoch() + 42;
         let initial_slot = initial_epoch.start_slot(E::slots_per_epoch());
         let skipped_backward_epoch = initial_epoch - 12;
@@ -1306,6 +1308,7 @@ mod test {
             .set_slot(initial_slot)
             .register_all_in_doppelganger_protection_if_enabled()
             .assert_all_disabled()
+            .await
             // First, simulate a check in the initialization epoch.
             .simulate_detect_doppelgangers(
                 initial_slot,
@@ -1318,6 +1321,7 @@ mod test {
                 },
             )
             .assert_all_disabled()
+            .await
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: initial_epoch + 1,
                 remaining_epochs: DEFAULT_REMAINING_DETECTION_EPOCHS,
@@ -1334,6 +1338,7 @@ mod test {
                 },
             )
             .assert_all_disabled()
+            .await
             // When time skips backward we should *not* allow doppelganger advancement.
             .assert_all_states(&DoppelgangerState {
                 next_check_epoch: initial_epoch + 1,
@@ -1341,8 +1346,8 @@ mod test {
             });
     }
 
-    #[test]
-    fn staggered_entry() {
+    #[tokio::test]
+    async fn staggered_entry() {
         let early_epoch = genesis_epoch() + 42;
         let early_slot = early_epoch.start_slot(E::slots_per_epoch());
         let early_activation_slot =
@@ -1363,7 +1368,8 @@ mod test {
             .register_validators(&early_validators)
             .set_slot(late_slot)
             .register_validators(&late_validators)
-            .assert_all_disabled();
+            .assert_all_disabled()
+            .await;
 
         for slot in early_slot.as_u64()..=late_activation_slot.as_u64() {
             let slot = Slot::new(slot);
@@ -1401,6 +1407,6 @@ mod test {
             }
         }
 
-        scenario.assert_all_enabled();
+        scenario.assert_all_enabled().await;
     }
 }

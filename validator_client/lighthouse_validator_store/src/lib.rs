@@ -2,7 +2,6 @@ use account_utils::validator_definitions::{PasswordStorage, ValidatorDefinition}
 use doppelganger_service::DoppelgangerService;
 use initialized_validators::InitializedValidators;
 use logging::crit;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use signing_method::Error as SigningError;
 use signing_method::{SignableMessage, SigningContext, SigningMethod};
@@ -14,7 +13,7 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 use task_executor::TaskExecutor;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use types::{
     graffiti::GraffitiString, AbstractExecPayload, Address, AggregateAndProof, Attestation,
@@ -264,12 +263,13 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     /// ## Warning
     ///
     /// This method should only be used for signing non-slashable messages.
-    fn doppelganger_bypassed_signing_method(
+    async fn doppelganger_bypassed_signing_method(
         &self,
         validator_pubkey: PublicKeyBytes,
     ) -> Result<Arc<SigningMethod>, Error> {
         self.validators
             .read()
+            .await
             .signing_method(&validator_pubkey)
             .ok_or(Error::UnknownPubkey(validator_pubkey))
     }
@@ -313,9 +313,10 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
 
     /// Returns the suggested_fee_recipient from `validator_definitions.yml` if any.
     /// This has been pulled into a private function so the read lock is dropped easily
-    fn suggested_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address> {
+    async fn suggested_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address> {
         self.validators
             .read()
+            .await
             .suggested_fee_recipient(validator_pubkey)
     }
 
@@ -325,8 +326,8 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     /// 1. validator_definitions.yml
     /// 2. process level gas limit
     /// 3. `DEFAULT_GAS_LIMIT`
-    pub fn get_gas_limit(&self, validator_pubkey: &PublicKeyBytes) -> u64 {
-        self.get_gas_limit_defaulting(self.validators.read().gas_limit(validator_pubkey))
+    pub async fn get_gas_limit(&self, validator_pubkey: &PublicKeyBytes) -> u64 {
+        self.get_gas_limit_defaulting(self.validators.read().await.gas_limit(validator_pubkey))
     }
 
     fn get_gas_limit_defaulting(&self, gas_limit: Option<u64>) -> u64 {
@@ -347,11 +348,17 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ///
     /// This function is currently only used in tests because in prod it is translated and combined
     /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
-    pub fn get_builder_proposals_testing_only(&self, validator_pubkey: &PublicKeyBytes) -> bool {
+    pub async fn get_builder_proposals_testing_only(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> bool {
         // If there is a `suggested_fee_recipient` in the validator definitions yaml
         // file, use that value.
         self.get_builder_proposals_defaulting(
-            self.validators.read().builder_proposals(validator_pubkey),
+            self.validators
+                .read()
+                .await
+                .builder_proposals(validator_pubkey),
         )
     }
 
@@ -368,12 +375,13 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ///
     /// This function is currently only used in tests because in prod it is translated and combined
     /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
-    pub fn get_builder_boost_factor_testing_only(
+    pub async fn get_builder_boost_factor_testing_only(
         &self,
         validator_pubkey: &PublicKeyBytes,
     ) -> Option<u64> {
         self.validators
             .read()
+            .await
             .builder_boost_factor(validator_pubkey)
             .or(self.builder_boost_factor)
     }
@@ -386,12 +394,13 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ///
     /// This function is currently only used in tests because in prod it is translated and combined
     /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
-    pub fn get_prefer_builder_proposals_testing_only(
+    pub async fn get_prefer_builder_proposals_testing_only(
         &self,
         validator_pubkey: &PublicKeyBytes,
     ) -> bool {
         self.validators
             .read()
+            .await
             .prefer_builder_proposals(validator_pubkey)
             .unwrap_or(self.prefer_builder_proposals)
     }
@@ -537,7 +546,9 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ) -> Result<SignedVoluntaryExit, Error> {
         let signing_epoch = voluntary_exit.epoch;
         let signing_context = self.signing_context(Domain::VoluntaryExit, signing_epoch);
-        let signing_method = self.doppelganger_bypassed_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(validator_pubkey)
+            .await?;
 
         let signature = signing_method
             .get_signature::<E, BlindedPayload<E>>(
@@ -584,7 +595,7 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     /// - `DoppelgangerStatus::ignored`: returns all the pubkeys from `only_safe` *plus* those still
     ///   undergoing protection. This is useful for collecting duties or other non-signing tasks.
     #[allow(clippy::needless_collect)] // Collect is required to avoid holding a lock.
-    fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
+    async fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
     where
         I: FromIterator<PublicKeyBytes>,
         F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>,
@@ -594,6 +605,7 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let pubkeys = self
             .validators
             .read()
+            .await
             .iter_voting_pubkeys()
             .cloned()
             .collect::<Vec<_>>();
@@ -626,22 +638,22 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
             })
     }
 
-    fn num_voting_validators(&self) -> usize {
-        self.validators.read().num_enabled()
+    async fn num_voting_validators(&self) -> usize {
+        self.validators.read().await.num_enabled()
     }
 
-    fn graffiti(&self, validator_pubkey: &PublicKeyBytes) -> Option<Graffiti> {
-        self.validators.read().graffiti(validator_pubkey)
+    async fn graffiti(&self, validator_pubkey: &PublicKeyBytes) -> Option<Graffiti> {
+        self.validators.read().await.graffiti(validator_pubkey)
     }
 
     /// Returns the fee recipient for the given public key. The priority order for fetching
     /// the fee recipient is:
     /// 1. validator_definitions.yml
     /// 2. process level fee recipient
-    fn get_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address> {
+    async fn get_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address> {
         // If there is a `suggested_fee_recipient` in the validator definitions yaml
         // file, use that value.
-        self.get_fee_recipient_defaulting(self.suggested_fee_recipient(validator_pubkey))
+        self.get_fee_recipient_defaulting(self.suggested_fee_recipient(validator_pubkey).await)
     }
 
     /// Translate the per validator and per process `builder_proposals`, `builder_boost_factor` and
@@ -656,29 +668,30 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     /// - If `builder_proposals` is set to false, set boost factor to 0 to indicate a preference for
     ///   local payloads.
     /// - Else return `None` to indicate no preference between builder and local payloads.
-    fn determine_builder_boost_factor(&self, validator_pubkey: &PublicKeyBytes) -> Option<u64> {
+    async fn determine_builder_boost_factor(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Option<u64> {
         let validator_prefer_builder_proposals = self
             .validators
             .read()
+            .await
             .prefer_builder_proposals(validator_pubkey);
 
         if matches!(validator_prefer_builder_proposals, Some(true)) {
             return Some(u64::MAX);
         }
 
-        let factor = self
-            .validators
-            .read()
+        let validators = self.validators.read().await;
+        let factor = validators
             .builder_boost_factor(validator_pubkey)
             .or_else(|| {
-                if matches!(
-                    self.validators.read().builder_proposals(validator_pubkey),
-                    Some(false)
-                ) {
+                if matches!(validators.builder_proposals(validator_pubkey), Some(false)) {
                     return Some(0);
                 }
                 None
             });
+        drop(validators);
 
         factor
             .or_else(|| {
@@ -727,9 +740,10 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         Ok(signature)
     }
 
-    fn set_validator_index(&self, validator_pubkey: &PublicKeyBytes, index: u64) {
+    async fn set_validator_index(&self, validator_pubkey: &PublicKeyBytes, index: u64) {
         self.initialized_validators()
             .write()
+            .await
             .set_index(validator_pubkey, index);
     }
 
@@ -851,8 +865,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let domain_hash = self.spec.get_builder_domain();
         let signing_root = validator_registration_data.signing_root(domain_hash);
 
-        let signing_method =
-            self.doppelganger_bypassed_signing_method(validator_registration_data.pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(validator_registration_data.pubkey)
+            .await?;
         let signature = signing_method
             .get_signature_from_root::<E, BlindedPayload<E>>(
                 SignableMessage::ValidatorRegistration(&validator_registration_data),
@@ -929,7 +944,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         //
         // As long as we disallow `SignedAggregateAndProof` then these selection proofs will never
         // be published on the network.
-        let signing_method = self.doppelganger_bypassed_signing_method(validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(validator_pubkey)
+            .await?;
 
         let signature = signing_method
             .get_signature::<E, BlindedPayload<E>>(
@@ -961,7 +978,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
             self.signing_context(Domain::SyncCommitteeSelectionProof, signing_epoch);
 
         // Bypass `with_validator_signing_method`: sync committee messages are not slashable.
-        let signing_method = self.doppelganger_bypassed_signing_method(*validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(*validator_pubkey)
+            .await?;
 
         validator_metrics::inc_counter_vec(
             &validator_metrics::SIGNED_SYNC_SELECTION_PROOFS_TOTAL,
@@ -997,7 +1016,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let signing_context = self.signing_context(Domain::SyncCommittee, signing_epoch);
 
         // Bypass `with_validator_signing_method`: sync committee messages are not slashable.
-        let signing_method = self.doppelganger_bypassed_signing_method(*validator_pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(*validator_pubkey)
+            .await?;
 
         let signature = signing_method
             .get_signature::<E, BlindedPayload<E>>(
@@ -1036,7 +1057,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let signing_context = self.signing_context(Domain::ContributionAndProof, signing_epoch);
 
         // Bypass `with_validator_signing_method`: sync committee messages are not slashable.
-        let signing_method = self.doppelganger_bypassed_signing_method(aggregator_pubkey)?;
+        let signing_method = self
+            .doppelganger_bypassed_signing_method(aggregator_pubkey)
+            .await?;
 
         let message = ContributionAndProof {
             aggregator_index,
@@ -1067,10 +1090,10 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     /// This function will only do actual pruning periodically, so it should usually be
     /// cheap to call. The `first_run` flag can be used to print a more verbose message when pruning
     /// runs.
-    fn prune_slashing_protection_db(&self, current_epoch: Epoch, first_run: bool) {
+    async fn prune_slashing_protection_db(&self, current_epoch: Epoch, first_run: bool) {
         // Attempt to prune every SLASHING_PROTECTION_HISTORY_EPOCHs, with a tolerance for
         // missing the epoch that aligns exactly.
-        let mut last_prune = self.slashing_protection_last_prune.lock();
+        let mut last_prune = self.slashing_protection_last_prune.lock().await;
         if current_epoch / SLASHING_PROTECTION_HISTORY_EPOCHS
             <= *last_prune / SLASHING_PROTECTION_HISTORY_EPOCHS
         {
@@ -1093,7 +1116,7 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         let new_min_target_epoch = current_epoch.saturating_sub(SLASHING_PROTECTION_HISTORY_EPOCHS);
         let new_min_slot = new_min_target_epoch.start_slot(E::slots_per_epoch());
 
-        let all_pubkeys: Vec<_> = self.voting_pubkeys(DoppelgangerStatus::ignored);
+        let all_pubkeys: Vec<_> = self.voting_pubkeys(DoppelgangerStatus::ignored).await;
 
         if let Err(e) = self
             .slashing_protection
@@ -1125,9 +1148,10 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     /// Returns `ProposalData` for the provided `pubkey` if it exists in `InitializedValidators`.
     /// `ProposalData` fields include defaulting logic described in `get_fee_recipient_defaulting`,
     /// `get_gas_limit_defaulting`, and `get_builder_proposals_defaulting`.
-    fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData> {
+    async fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData> {
         self.validators
             .read()
+            .await
             .validator(pubkey)
             .map(|validator| ProposalData {
                 validator_index: validator.get_index(),

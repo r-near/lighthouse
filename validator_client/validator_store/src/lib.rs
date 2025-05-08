@@ -60,23 +60,30 @@ pub trait ValidatorStore: Send + Sync {
     ///   protection and are safe-enough to sign messages.
     /// - `DoppelgangerStatus::ignored`: returns all the pubkeys from `only_safe` *plus* those still
     ///   undergoing protection. This is useful for collecting duties or other non-signing tasks.
-    fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
+    fn voting_pubkeys<I, F>(&self, filter_func: F) -> impl Future<Output = I> + Send + Sync
     where
         I: FromIterator<PublicKeyBytes>,
-        F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes>;
+        F: Fn(DoppelgangerStatus) -> Option<PublicKeyBytes> + Send + Sync;
 
     /// Check if the `validator_pubkey` is permitted by the doppleganger protection to sign
     /// messages.
     fn doppelganger_protection_allows_signing(&self, validator_pubkey: PublicKeyBytes) -> bool;
 
-    fn num_voting_validators(&self) -> usize;
-    fn graffiti(&self, validator_pubkey: &PublicKeyBytes) -> Option<Graffiti>;
+    fn num_voting_validators(&self) -> impl Future<Output = usize> + Send + Sync;
+
+    fn graffiti(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> impl Future<Output = Option<Graffiti>> + Send + Sync;
 
     /// Returns the fee recipient for the given public key. The priority order for fetching
     /// the fee recipient is:
     /// 1. validator_definitions.yml
     /// 2. process level fee recipient
-    fn get_fee_recipient(&self, validator_pubkey: &PublicKeyBytes) -> Option<Address>;
+    fn get_fee_recipient(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> impl Future<Output = Option<Address>>;
 
     /// Translate the `builder_proposals`, `builder_boost_factor` and
     /// `prefer_builder_proposals` to a boost factor, if available.
@@ -86,7 +93,10 @@ pub trait ValidatorStore: Send + Sync {
     /// - If `builder_proposals` is set to false, set boost factor to 0 to indicate a preference for
     ///   local payloads.
     /// - Else return `None` to indicate no preference between builder and local payloads.
-    fn determine_builder_boost_factor(&self, validator_pubkey: &PublicKeyBytes) -> Option<u64>;
+    fn determine_builder_boost_factor(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> impl Future<Output = Option<u64>> + Send + Sync;
 
     fn randao_reveal(
         &self,
@@ -94,7 +104,11 @@ pub trait ValidatorStore: Send + Sync {
         signing_epoch: Epoch,
     ) -> impl Future<Output = Result<Signature, Error<Self::Error>>> + Send;
 
-    fn set_validator_index(&self, validator_pubkey: &PublicKeyBytes, index: u64);
+    fn set_validator_index(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        index: u64,
+    ) -> impl Future<Output = ()> + Send + Sync;
 
     fn sign_block(
         &self,
@@ -165,12 +179,19 @@ pub trait ValidatorStore: Send + Sync {
     /// This function will only do actual pruning periodically, so it should usually be
     /// cheap to call. The `first_run` flag can be used to print a more verbose message when pruning
     /// runs.
-    fn prune_slashing_protection_db(&self, current_epoch: Epoch, first_run: bool);
+    fn prune_slashing_protection_db(
+        &self,
+        current_epoch: Epoch,
+        first_run: bool,
+    ) -> impl Future<Output = ()> + Send + Sync;
 
     /// Returns `ProposalData` for the provided `pubkey` if it exists in `InitializedValidators`.
     /// `ProposalData` fields include defaulting logic described in `get_fee_recipient_defaulting`,
     /// `get_gas_limit_defaulting`, and `get_builder_proposals_defaulting`.
-    fn proposal_data(&self, pubkey: &PublicKeyBytes) -> Option<ProposalData>;
+    fn proposal_data(
+        &self,
+        pubkey: &PublicKeyBytes,
+    ) -> impl Future<Output = Option<ProposalData>> + Send + Sync;
 }
 
 #[derive(Clone, Debug, PartialEq)]
