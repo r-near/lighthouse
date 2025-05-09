@@ -20,7 +20,6 @@ pub enum Error<T> {
     GreaterThanCurrentEpoch { epoch: Epoch, current_epoch: Epoch },
     UnableToSignAttestation(AttestationError),
     SpecificError(T),
-    UnableToSign(SigningError),
     Middleware(String),
 }
 

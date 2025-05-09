@@ -114,6 +114,7 @@ pub struct SubscriptionSlots {
     duty_slot: Slot,
 }
 
+#[derive(Copy, Clone)]
 pub struct SelectionProofConfig {
     pub lookahead_slot: u64,
     pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
@@ -121,16 +122,27 @@ pub struct SelectionProofConfig {
     pub parallel_sign: bool,
 }
 
+impl SelectionProofConfig {
+    fn default() -> Self {
+        Self {
+            lookahead_slot: 0,
+            computation_offset: Duration::default(),
+            selections_endpoint: false,
+            parallel_sign: false,
+        }
+    }
+}
+
 /// Create a selection proof for `duty`.
 ///
 /// Return `Ok(None)` if the attesting validator is not an aggregator.
-async fn make_selection_proof<S: ValidatorStore + 'static>(
+async fn make_selection_proof<S: ValidatorStore + 'static, T: SlotClock + 'static>(
     duty: &AttesterData,
     validator_store: &S,
     spec: &ChainSpec,
-    beacon_nodes: &Arc<BeaconNodeFallback<T, E>>,
+    beacon_nodes: &Arc<BeaconNodeFallback<T>>,
     config: &SelectionProofConfig,
-) -> Result<Option<SelectionProof>, Error> {
+) -> Result<Option<SelectionProof>, Error<S::Error>> {
     let selection_proof = if config.selections_endpoint {
         let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
@@ -266,7 +278,7 @@ pub struct DutiesServiceBuilder<S, T> {
     //// Whether we permit large validator counts in the metrics.
     enable_high_validator_count_metrics: bool,
     /// If this validator is running in distributed mode.
-    distributed: bool,
+    selection_proof_config: SelectionProofConfig,
     disable_attesting: bool,
 }
 
@@ -285,7 +297,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
             executor: None,
             spec: None,
             enable_high_validator_count_metrics: false,
-            distributed: false,
+            selection_proof_config: SelectionProofConfig::default(),
             disable_attesting: false,
         }
     }
@@ -323,8 +335,8 @@ impl<S, T> DutiesServiceBuilder<S, T> {
         self
     }
 
-    pub fn distributed(mut self, distributed: bool) -> Self {
-        self.distributed = distributed;
+    pub fn selection_proof_config(mut self, selection_proof_config: SelectionProofConfig) -> Self {
+        self.selection_proof_config = selection_proof_config;
         self
     }
 
@@ -337,7 +349,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
         Ok(DutiesService {
             attesters: Default::default(),
             proposers: Default::default(),
-            sync_duties: SyncDutiesMap::new(self.distributed),
+            sync_duties: SyncDutiesMap::new(self.selection_proof_config),
             validator_store: self
                 .validator_store
                 .ok_or("Cannot build DutiesService without validator_store")?,
@@ -353,7 +365,7 @@ impl<S, T> DutiesServiceBuilder<S, T> {
                 .ok_or("Cannot build DutiesService without executor")?,
             spec: self.spec.ok_or("Cannot build DutiesService without spec")?,
             enable_high_validator_count_metrics: self.enable_high_validator_count_metrics,
-            distributed: self.distributed,
+            selection_proof_config: self.selection_proof_config,
             disable_attesting: self.disable_attesting,
         })
     }
@@ -1168,9 +1180,9 @@ async fn post_validator_duties_attester<S: ValidatorStore, T: SlotClock + 'stati
 }
 
 // Create a helper function here to reduce code duplication for normal and distributed mode
-fn process_duty_and_proof<E: EthSpec>(
+fn process_duty_and_proof<S: ValidatorStore>(
     attesters: &mut RwLockWriteGuard<AttesterMap>,
-    result: Result<(AttesterData, Option<SelectionProof>), Error>,
+    result: Result<(AttesterData, Option<SelectionProof>), Error<S::Error>>,
     dependent_root: Hash256,
     current_slot: Slot,
 ) -> bool {
@@ -1198,7 +1210,7 @@ fn process_duty_and_proof<E: EthSpec>(
     };
 
     let attester_map = attesters.entry(duty.pubkey).or_default();
-    let epoch = duty.slot.epoch(E::slots_per_epoch());
+    let epoch = duty.slot.epoch(S::E::slots_per_epoch());
     match attester_map.entry(epoch) {
         hash_map::Entry::Occupied(mut entry) => {
             // No need to update duties for which no proof was computed.
@@ -1304,7 +1316,7 @@ async fn fill_in_selection_proofs<S: ValidatorStore + 'static, T: SlotClock + 's
                     .map(|duty| async {
                         let opt_selection_proof = make_selection_proof(
                             &duty,
-                            &duties_service.validator_store,
+                            duties_service.validator_store.as_ref(),
                             &duties_service.spec,
                             &duties_service.beacon_nodes,
                             &duties_service.selection_proof_config,
@@ -1317,7 +1329,7 @@ async fn fill_in_selection_proofs<S: ValidatorStore + 'static, T: SlotClock + 's
                 while let Some(result) = duty_and_proof_results.next().await {
                     let mut attesters = duties_service.attesters.write();
                     // if process_duty_and_proof returns false, exit the loop
-                    if !process_duty_and_proof::<E>(
+                    if !process_duty_and_proof::<S>(
                         &mut attesters,
                         result,
                         dependent_root,
@@ -1332,7 +1344,7 @@ async fn fill_in_selection_proofs<S: ValidatorStore + 'static, T: SlotClock + 's
                     .then(|duty| async {
                         let opt_selection_proof = make_selection_proof(
                             &duty,
-                            &duties_service.validator_store,
+                            duties_service.validator_store.as_ref(),
                             &duties_service.spec,
                             &duties_service.beacon_nodes,
                             &duties_service.selection_proof_config,
@@ -1346,7 +1358,7 @@ async fn fill_in_selection_proofs<S: ValidatorStore + 'static, T: SlotClock + 's
                 // Add to attesters store.
                 let mut attesters = duties_service.attesters.write();
                 for result in duty_and_proof_results {
-                    if !process_duty_and_proof::<E>(
+                    if !process_duty_and_proof::<S>(
                         &mut attesters,
                         result,
                         dependent_root,

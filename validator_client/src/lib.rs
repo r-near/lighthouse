@@ -483,7 +483,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             }
         };
 
-        let sync_selection_proof_config = if config.distributed {
+        let _sync_selection_proof_config = if config.distributed {
             SelectionProofConfig {
                 lookahead_slot: AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED,
                 computation_offset: Duration::default(),
@@ -499,21 +499,20 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             }
         };
 
-        let duties_context = context.service_context("duties".into());
-        let duties_service = Arc::new(DutiesService {
-            attesters: <_>::default(),
-            proposers: <_>::default(),
-            sync_duties: SyncDutiesMap::new(sync_selection_proof_config),
-            slot_clock: slot_clock.clone(),
-            beacon_nodes: beacon_nodes.clone(),
-            validator_store: validator_store.clone(),
-            unknown_validator_next_poll_slots: <_>::default(),
-            spec: context.eth2_config.spec.clone(),
-            context: duties_context,
-            enable_high_validator_count_metrics: config.enable_high_validator_count_metrics,
-            selection_proof_config: attestation_selection_proof_config,
-            disable_attesting: config.disable_attesting,
-        });
+        let duties_service: Arc<
+            DutiesService<LighthouseValidatorStore<SystemTimeSlotClock, E>, SystemTimeSlotClock>,
+        > = Arc::new(
+            DutiesServiceBuilder::new()
+                .slot_clock(slot_clock.clone())
+                .beacon_nodes(beacon_nodes.clone())
+                .validator_store(validator_store.clone())
+                .spec(context.eth2_config.spec.clone())
+                .executor(context.executor.clone())
+                .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
+                .selection_proof_config(attestation_selection_proof_config)
+                .disable_attesting(config.disable_attesting)
+                .build()?,
+        );
 
         // Update the metrics server.
         if let Some(ctx) = &validator_metrics_ctx {

@@ -1,6 +1,4 @@
 use crate::duties_service::{DutiesService, Error, SelectionProofConfig};
-// use beacon_node_fallback::BeaconNodeFallback;
-use doppelganger_service::DoppelgangerStatus;
 use eth2::types::{Signature, SyncCommitteeSelection};
 use futures::future::join_all;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -489,8 +487,8 @@ pub async fn poll_sync_committee_duties_for_period<S: ValidatorStore, T: SlotClo
 }
 
 // Create a helper function here to reduce code duplication for normal and distributed mode
-pub async fn make_sync_selection_proof<T: SlotClock + 'static, E: EthSpec>(
-    duties_service: &Arc<DutiesService<T, E>>,
+pub async fn make_sync_selection_proof<S: ValidatorStore, T: SlotClock + 'static>(
+    duties_service: &Arc<DutiesService<S, T>>,
     duty: &SyncDuty,
     proof_slot: Slot,
     subnet_id: SyncSubnetId,
@@ -608,7 +606,7 @@ pub async fn fill_in_aggregation_proofs<S: ValidatorStore, T: SlotClock + 'stati
             let mut futures_unordered = FuturesUnordered::new();
 
             for (_, duty) in pre_compute_duties {
-                let subnet_ids = match duty.subnet_ids::<E>() {
+                let subnet_ids = match duty.subnet_ids::<S::E>() {
                     Ok(subnet_ids) => subnet_ids,
                     Err(e) => {
                         crit!(
@@ -646,7 +644,7 @@ pub async fn fill_in_aggregation_proofs<S: ValidatorStore, T: SlotClock + 'stati
                     let validators = committee_duties.validators.read();
 
                     // Check if the validator is an aggregator
-                    match proof.is_aggregator::<E>() {
+                    match proof.is_aggregator::<S::E>() {
                         Ok(true) => {
                             if let Some(Some(duty)) = validators.get(&validator_index) {
                                 debug!(
@@ -703,7 +701,7 @@ pub async fn fill_in_aggregation_proofs<S: ValidatorStore, T: SlotClock + 'stati
                         continue;
                     }
                 };
-              
+
                 // Create futures to produce proofs.
                 let duties_service_ref = &duties_service;
                 let futures = subnet_ids.iter().map(|subnet_id| async move {
