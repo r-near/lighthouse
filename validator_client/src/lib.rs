@@ -60,13 +60,13 @@ const WAITING_FOR_GENESIS_POLL_TIME: Duration = Duration::from_secs(12);
 const HTTP_ATTESTATION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT: u32 = 24;
-const HTTP_ATTESTATION_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For distributed mode only
+const HTTP_ATTESTATION_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For DVT involving middleware only
 const HTTP_LIVENESS_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_PROPOSAL_TIMEOUT_QUOTIENT: u32 = 2;
 const HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
-const HTTP_SYNC_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For distributed mode only
+const HTTP_SYNC_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For DVT involving middleware only
 const HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
@@ -83,12 +83,12 @@ const SELECTION_PROOF_SLOT_LOOKAHEAD: u64 = 8;
 /// The attestation selection proof lookahead for those running with the --distributed flag.
 const SELECTION_PROOF_SLOT_LOOKAHEAD_DVT: u64 = 1;
 
-/// Fraction of a slot at which selection proof signing should happen (2 means half way).
+/// Fraction of a slot at which attestation selection proof signing should happen (2 means half way).
 const SELECTION_PROOF_SCHEDULE_DENOM: u32 = 2;
 
-/// Number of epochs in advance to compute selection proofs when not in `distributed` mode.
+/// Number of epochs in advance to compute sync selection proofs when not in `distributed` mode.
 pub const AGGREGATION_PRE_COMPUTE_EPOCHS: u64 = 2;
-/// Number of slots in advance to compute selection proofs when in `distributed` mode.
+/// Number of slots in advance to compute sync selection proofs when in `distributed` mode.
 pub const AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED: u64 = 1;
 
 type ValidatorStore<E> = LighthouseValidatorStore<SystemTimeSlotClock, E>;
@@ -499,9 +499,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             }
         };
 
-        let duties_service: Arc<
-            DutiesService<LighthouseValidatorStore<SystemTimeSlotClock, E>, SystemTimeSlotClock>,
-        > = Arc::new(
+        let duties_service = Arc::new(
             DutiesServiceBuilder::new()
                 .slot_clock(slot_clock.clone())
                 .beacon_nodes(beacon_nodes.clone())

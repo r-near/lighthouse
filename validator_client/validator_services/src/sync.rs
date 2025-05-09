@@ -487,7 +487,7 @@ pub async fn poll_sync_committee_duties_for_period<S: ValidatorStore, T: SlotClo
 }
 
 // Create a helper function here to reduce code duplication for normal and distributed mode
-pub async fn make_sync_selection_proof<S: ValidatorStore, T: SlotClock + 'static>(
+pub async fn make_sync_selection_proof<S: ValidatorStore, T: SlotClock>(
     duties_service: &Arc<DutiesService<S, T>>,
     duty: &SyncDuty,
     proof_slot: Slot,
@@ -519,7 +519,7 @@ pub async fn make_sync_selection_proof<S: ValidatorStore, T: SlotClock + 'static
         }
     };
 
-    // In distributed mode when we want to call the selections endpoint
+    // In DVT with middleware, when we want to call the selections endpoint
     if duties_service
         .sync_duties
         .selection_proof_config
@@ -529,7 +529,7 @@ pub async fn make_sync_selection_proof<S: ValidatorStore, T: SlotClock + 'static
             "validator_index" = duty.validator_index,
             "slot" = %proof_slot,
             "subcommittee_index" = *subnet_id,
-            // In distributed mode, this is partial selection proof
+            // This is partial selection proof
             "partial selection proof" = ?Signature::from(selection_proof.clone()),
             "Sending sync selection to middleware"
         );

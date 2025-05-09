@@ -118,11 +118,12 @@ pub struct SubscriptionSlots {
 pub struct SelectionProofConfig {
     pub lookahead_slot: u64,
     pub computation_offset: Duration, // The seconds to compute the selection proof before a slot
-    pub selections_endpoint: bool,
-    pub parallel_sign: bool,
+    pub selections_endpoint: bool, // whether to call the selections endpoint, true for DVT with middleware
+    pub parallel_sign: bool, // whether to sign the selection proof in parallel, true in distributed mode
 }
 
 impl SelectionProofConfig {
+    // Create a default associated function to be passed in DutiesServiceBuilder::new()
     fn default() -> Self {
         Self {
             lookahead_slot: 0,
@@ -136,7 +137,7 @@ impl SelectionProofConfig {
 /// Create a selection proof for `duty`.
 ///
 /// Return `Ok(None)` if the attesting validator is not an aggregator.
-async fn make_selection_proof<S: ValidatorStore + 'static, T: SlotClock + 'static>(
+async fn make_selection_proof<S: ValidatorStore + 'static, T: SlotClock>(
     duty: &AttesterData,
     validator_store: &S,
     spec: &ChainSpec,
@@ -147,7 +148,7 @@ async fn make_selection_proof<S: ValidatorStore + 'static, T: SlotClock + 'stati
         let beacon_committee_selection = BeaconCommitteeSelection {
             validator_index: duty.validator_index,
             slot: duty.slot,
-            // In distributed mode, this is partial selection proof
+            // This is partial selection proof
             selection_proof: validator_store
                 .produce_selection_proof(duty.pubkey, duty.slot)
                 .await
@@ -183,6 +184,7 @@ async fn make_selection_proof<S: ValidatorStore + 'static, T: SlotClock + 'stati
         debug!(
             "validator_index" = response_data.validator_index,
             "slot" = %response_data.slot,
+            // The selection proof from middleware response will be a full selection proof
             "full selection proof" = ?response_data.selection_proof,
             "Received selection from middleware"
         );
@@ -277,8 +279,9 @@ pub struct DutiesServiceBuilder<S, T> {
     spec: Option<Arc<ChainSpec>>,
     //// Whether we permit large validator counts in the metrics.
     enable_high_validator_count_metrics: bool,
-    /// If this validator is running in distributed mode.
+    /// Create attestation selection proof config
     attestation_selection_proof_config: SelectionProofConfig,
+    /// Create sync selection proof config
     sync_selection_proof_config: SelectionProofConfig,
     disable_attesting: bool,
 }
