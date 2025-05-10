@@ -432,10 +432,7 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
 
         let voting_validators = validator_store.num_voting_validators().await;
 
-        info!(
-            voting_validators,
-            "Loaded validator keypair store"
-        );
+        info!(voting_validators, "Loaded validator keypair store");
 
         // Perform pruning of the slashing protection database on start-up. In case the database is
         // oversized from having not been pruned (by a prior version) we don't want to prune
