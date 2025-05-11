@@ -460,8 +460,8 @@ impl ApiTester {
     }
 
     pub async fn create_web3signer_validators(self, s: Web3SignerValidatorScenario) -> Self {
-        let initial_vals = self.vals_total();
-        let initial_enabled_vals = self.vals_enabled();
+        let initial_vals = self.vals_total().await;
+        let initial_enabled_vals = self.vals_enabled().await;
 
         let request: Vec<_> = (0..s.count)
             .map(|i| {
@@ -995,7 +995,9 @@ async fn hd_validator_creation() {
     ApiTester::new()
         .await
         .assert_enabled_validators_count(0)
+        .await
         .assert_validators_count(0)
+        .await
         .create_hd_validators(HdValidatorScenario {
             count: 2,
             specify_mnemonic: true,
@@ -1004,7 +1006,9 @@ async fn hd_validator_creation() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .create_hd_validators(HdValidatorScenario {
             count: 1,
             specify_mnemonic: false,
@@ -1013,7 +1017,9 @@ async fn hd_validator_creation() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(3)
+        .await
         .create_hd_validators(HdValidatorScenario {
             count: 0,
             specify_mnemonic: true,
@@ -1022,7 +1028,9 @@ async fn hd_validator_creation() {
         })
         .await
         .assert_enabled_validators_count(2)
-        .assert_validators_count(3);
+        .await
+        .assert_validators_count(3)
+        .await;
 }
 
 #[tokio::test]
@@ -1037,7 +1045,9 @@ async fn validator_exit() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .test_sign_voluntary_exits(0, None)
         .await
         .test_sign_voluntary_exits(0, Some(Epoch::new(256)))
@@ -1056,15 +1066,21 @@ async fn validator_enabling() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
-        .assert_validators_count(2);
+        .await
+        .assert_validators_count(2)
+        .await;
 }
 
 #[tokio::test]
@@ -1079,7 +1095,9 @@ async fn validator_gas_limit() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_gas_limit(0, 500)
         .await
         .assert_gas_limit(0, 500)
@@ -1088,12 +1106,15 @@ async fn validator_gas_limit() {
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_gas_limit(0, 1000)
         .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_gas_limit(0, 1000)
         .await;
 }
@@ -1110,19 +1131,24 @@ async fn validator_builder_proposals() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_builder_proposals(0, true)
         .await
         // Test setting builder proposals while the validator is disabled
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_builder_proposals(0, false)
         .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_builder_proposals(0, false)
         .await;
 }
@@ -1139,19 +1165,24 @@ async fn validator_builder_boost_factor() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_builder_boost_factor(0, 120)
         .await
         // Test setting builder proposals while the validator is disabled
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_builder_boost_factor(0, 80)
         .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_builder_boost_factor(0, Some(80))
         .await;
 }
@@ -1176,6 +1207,7 @@ async fn validator_derived_builder_boost_factor_with_process_defaults() {
         })
         .await
         .assert_default_builder_boost_factor(Some(80))
+        .await
         .assert_validator_derived_builder_boost_factor(0, Some(80))
         .await
         .set_builder_proposals(0, false)
@@ -1202,7 +1234,8 @@ async fn validator_builder_boost_factor_global_builder_proposals_true() {
     };
     ApiTester::new_with_config(config)
         .await
-        .assert_default_builder_boost_factor(None);
+        .assert_default_builder_boost_factor(None)
+        .await;
 }
 
 #[tokio::test]
@@ -1215,7 +1248,8 @@ async fn validator_builder_boost_factor_global_builder_proposals_false() {
     };
     ApiTester::new_with_config(config)
         .await
-        .assert_default_builder_boost_factor(Some(0));
+        .assert_default_builder_boost_factor(Some(0))
+        .await;
 }
 
 #[tokio::test]
@@ -1228,7 +1262,8 @@ async fn validator_builder_boost_factor_global_prefer_builder_proposals_true() {
     };
     ApiTester::new_with_config(config)
         .await
-        .assert_default_builder_boost_factor(Some(u64::MAX));
+        .assert_default_builder_boost_factor(Some(u64::MAX))
+        .await;
 }
 
 #[tokio::test]
@@ -1241,7 +1276,8 @@ async fn validator_builder_boost_factor_global_prefer_builder_proposals_true_ove
     };
     ApiTester::new_with_config(config)
         .await
-        .assert_default_builder_boost_factor(Some(u64::MAX));
+        .assert_default_builder_boost_factor(Some(u64::MAX))
+        .await;
 }
 
 #[tokio::test]
@@ -1256,19 +1292,24 @@ async fn prefer_builder_proposals_validator() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_prefer_builder_proposals(0, false)
         .await
         // Test setting builder proposals while the validator is disabled
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_prefer_builder_proposals(0, true)
         .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_prefer_builder_proposals(0, true)
         .await;
 }
@@ -1285,7 +1326,9 @@ async fn validator_graffiti() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_graffiti(0, "Mr F was here")
         .await
         .assert_graffiti(0, "Mr F was here")
@@ -1294,12 +1337,15 @@ async fn validator_graffiti() {
         .set_validator_enabled(0, false)
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(2)
+        .await
         .set_graffiti(0, "Mr F was here again")
         .await
         .set_validator_enabled(0, true)
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_graffiti(0, "Mr F was here again")
         .await;
 }
@@ -1316,7 +1362,9 @@ async fn validator_graffiti_api() {
         })
         .await
         .assert_enabled_validators_count(2)
+        .await
         .assert_validators_count(2)
+        .await
         .set_graffiti(0, "Mr F was here")
         .await
         .test_get_graffiti(0, "Mr F was here")
@@ -1334,28 +1382,36 @@ async fn keystore_validator_creation() {
     ApiTester::new()
         .await
         .assert_enabled_validators_count(0)
+        .await
         .assert_validators_count(0)
+        .await
         .create_keystore_validators(KeystoreValidatorScenario {
             correct_password: true,
             enabled: true,
         })
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(1)
+        .await
         .create_keystore_validators(KeystoreValidatorScenario {
             correct_password: false,
             enabled: true,
         })
         .await
         .assert_enabled_validators_count(1)
+        .await
         .assert_validators_count(1)
+        .await
         .create_keystore_validators(KeystoreValidatorScenario {
             correct_password: true,
             enabled: false,
         })
         .await
         .assert_enabled_validators_count(1)
-        .assert_validators_count(2);
+        .await
+        .assert_validators_count(2)
+        .await;
 }
 
 #[tokio::test]
@@ -1363,12 +1419,16 @@ async fn web3signer_validator_creation() {
     ApiTester::new()
         .await
         .assert_enabled_validators_count(0)
+        .await
         .assert_validators_count(0)
+        .await
         .create_web3signer_validators(Web3SignerValidatorScenario {
             count: 1,
             enabled: true,
         })
         .await
         .assert_enabled_validators_count(1)
-        .assert_validators_count(1);
+        .await
+        .assert_validators_count(1)
+        .await;
 }

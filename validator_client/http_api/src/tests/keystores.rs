@@ -2092,8 +2092,8 @@ async fn import_remotekey_web3signer_disabled() {
             .unwrap();
 
         // 1 validator imported.
-        assert_eq!(tester.vals_total(), 1);
-        assert_eq!(tester.vals_enabled(), 0);
+        assert_eq!(tester.vals_total().await, 1);
+        assert_eq!(tester.vals_enabled().await, 0);
 
         // Import remotekeys.
         let import_res = tester
@@ -2109,8 +2109,8 @@ async fn import_remotekey_web3signer_disabled() {
         );
 
         // Still only one validator. Web3signer is overwritten by remotekey.
-        assert_eq!(tester.vals_total(), 1);
-        assert_eq!(tester.vals_enabled(), 1);
+        assert_eq!(tester.vals_total().await, 1);
+        assert_eq!(tester.vals_enabled().await, 1);
 
         // Remotekey overwrites web3signer.
         let expected_responses = vec![SingleListRemotekeysResponse {
@@ -2147,8 +2147,8 @@ async fn import_remotekey_web3signer_enabled() {
             .unwrap();
 
         // 1 validator imported.
-        assert_eq!(tester.vals_total(), 1);
-        assert_eq!(tester.vals_enabled(), 1);
+        assert_eq!(tester.vals_total().await, 1);
+        assert_eq!(tester.vals_enabled().await, 1);
         let web3_vals = tester
             .initialized_validators
             .read()
@@ -2169,8 +2169,8 @@ async fn import_remotekey_web3signer_enabled() {
             all_with_status(1, ImportRemotekeyStatus::Duplicate),
         );
 
-        assert_eq!(tester.vals_total(), 1);
-        assert_eq!(tester.vals_enabled(), 1);
+        assert_eq!(tester.vals_total().await, 1);
+        assert_eq!(tester.vals_enabled().await, 1);
         {
             let vals = tester.initialized_validators.read().await;
             let remote_vals = vals.validator_definitions();
