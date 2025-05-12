@@ -25,7 +25,7 @@ use api_types::{AppRequestId, Response};
 use futures::stream::StreamExt;
 use gossipsub::{
     IdentTopic as Topic, MessageAcceptance, MessageAuthenticity, MessageId, PublishError,
-    TopicScoreParams,
+    RawMessage, TopicScoreParams,
 };
 use gossipsub_scoring_parameters::{lighthouse_gossip_thresholds, PeerScoreSettings};
 use libp2p::multiaddr::{self, Multiaddr, Protocol as MProtocol};
@@ -49,7 +49,9 @@ use utils::{build_transport, strip_peer_id, Context as ServiceContext};
 pub mod api_types;
 mod gossip_cache;
 pub mod gossipsub_scoring_parameters;
+mod mallory;
 pub mod utils;
+pub use mallory::*;
 /// The number of peers we target per subnet for discovery queries.
 pub const TARGET_SUBNET_PEERS: usize = 3;
 
@@ -105,6 +107,10 @@ pub enum NetworkEvent<E: EthSpec> {
     ZeroListeners,
     /// A peer has an updated custody group count from MetaData.
     PeerUpdatedCustodyGroupCount(PeerId),
+    /// Mallory: Identify has been received.
+    IdentifyReceived(PeerId),
+    /// Mallory: Pass swarm events to mallory to handle
+    MallorySwarmEvent(MallorySwarmEvent),
 }
 
 pub type Gossipsub = gossipsub::Behaviour<SnappyTransform, SubscriptionFilter>;
@@ -112,7 +118,7 @@ pub type SubscriptionFilter =
     gossipsub::MaxCountSubscriptionFilter<gossipsub::WhitelistSubscriptionFilter>;
 
 #[derive(NetworkBehaviour)]
-pub(crate) struct Behaviour<E>
+pub struct Behaviour<E>
 where
     E: EthSpec,
 {
@@ -146,7 +152,7 @@ where
 /// This core behaviour is managed by `Behaviour` which adds peer management to all core
 /// behaviours.
 pub struct Network<E: EthSpec> {
-    swarm: libp2p::swarm::Swarm<Behaviour<E>>,
+    pub swarm: libp2p::swarm::Swarm<Behaviour<E>>,
     /* Auxiliary Fields */
     /// A collections of variables accessible outside the network service.
     network_globals: Arc<NetworkGlobals<E>>,
@@ -161,9 +167,11 @@ pub struct Network<E: EthSpec> {
     score_settings: PeerScoreSettings<E>,
     /// The interval for updating gossipsub scores
     update_gossipsub_scores: tokio::time::Interval,
-    gossip_cache: GossipCache,
+    pub gossip_cache: GossipCache,
     /// This node's PeerId.
     pub local_peer_id: PeerId,
+    /// Mallory specific. User handles the ping requests.
+    user_handle_ping: bool,
 }
 
 /// Implements the combined behaviour for the libp2p service.
@@ -181,7 +189,7 @@ impl<E: EthSpec> Network<E> {
         let config = ctx.config.clone();
         trace!("Libp2p Service starting");
         // initialise the node's ID
-        let local_keypair = utils::load_private_key(&config);
+        let local_keypair = ctx.keypair;
 
         // Trusted peers will also be marked as explicit in GossipSub.
         // Cfr. https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#explicit-peering-agreements
@@ -380,6 +388,7 @@ impl<E: EthSpec> Network<E> {
             config.outbound_rate_limiter_config.clone(),
             network_params,
             seq_number,
+            &config.attacker_config,
         );
 
         let discovery = {
@@ -418,20 +427,35 @@ impl<E: EthSpec> Network<E> {
                 quic_enabled: !config.disable_quic_support,
                 metrics_enabled: config.metrics_enabled,
                 target_peer_count: config.target_peers,
+                ping_interval_inbound: config
+                    .attacker_config
+                    .inbound_peers_ping
+                    .unwrap_or(crate::peer_manager::config::DEFAULT_PING_INTERVAL_INBOUND),
+                ping_interval_outbound: config
+                    .attacker_config
+                    .outbound_peers_ping
+                    .unwrap_or(crate::peer_manager::config::DEFAULT_PING_INTERVAL_OUTBOUND),
+                status_interval: config
+                    .attacker_config
+                    .status_interval
+                    .unwrap_or(crate::peer_manager::config::DEFAULT_STATUS_INTERVAL),
                 ..Default::default()
             };
             PeerManager::new(peer_manager_cfg, network_globals.clone())?
         };
 
+        let max_incomming = if let Some(connections) = ctx.incoming_connections.as_ref() {
+            *connections
+        } else {
+            (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
+                .ceil() as u32
+        };
+
         let connection_limits = {
             let limits = libp2p::connection_limits::ConnectionLimits::default()
-                .with_max_pending_incoming(Some(5))
+                .with_max_pending_incoming(Some(max_incomming))
                 .with_max_pending_outgoing(Some(16))
-                .with_max_established_incoming(Some(
-                    (config.target_peers as f32
-                        * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR))
-                        .ceil() as u32,
-                ))
+                .with_max_established_incoming(Some(max_incomming))
                 .with_max_established_outgoing(Some(
                     (config.target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR)).ceil() as u32,
                 ))
@@ -515,6 +539,7 @@ impl<E: EthSpec> Network<E> {
             update_gossipsub_scores,
             gossip_cache,
             local_peer_id,
+            user_handle_ping: config.attacker_config.user_handle_ping,
         };
 
         network.start(&config).await?;
@@ -1386,7 +1411,7 @@ impl<E: EthSpec> Network<E> {
         name = "libp2p",
         skip_all
     )]
-    fn send_meta_data_request(&mut self, peer_id: PeerId) {
+    pub fn send_meta_data_request(&mut self, peer_id: PeerId) {
         let event = if self.fork_context.spec.is_peer_das_scheduled() {
             // Nodes with higher custody will probably start advertising it
             // before peerdas is activated
@@ -1703,8 +1728,23 @@ impl<E: EthSpec> Network<E> {
                     /* Behaviour managed protocols: Ping and Metadata */
                     RequestType::Ping(ping) => {
                         // inform the peer manager and send the response
+                        if self.user_handle_ping {
+                            return Some(NetworkEvent::RequestReceived {
+                                peer_id,
+                                inbound_request_id,
+                                request_type,
+                            });
+                        }
                         self.peer_manager_mut().ping_request(&peer_id, ping.data);
                         None
+                    }
+                    RequestType::Raw(_) => {
+                        // inform the peer manager and send the response
+                        return Some(NetworkEvent::RequestReceived {
+                            peer_id,
+                            inbound_request_id,
+                            request_type,
+                        });
                     }
                     RequestType::MetaData(req) => {
                         // send the requested meta-data
@@ -1949,6 +1989,7 @@ impl<E: EthSpec> Network<E> {
                 }
                 // send peer info to the peer manager.
                 self.peer_manager_mut().identify(&peer_id, &info);
+                return Some(NetworkEvent::IdentifyReceived(peer_id));
             }
             identify::Event::Sent { .. } => {}
             identify::Event::Error { .. } => {}
@@ -2078,7 +2119,15 @@ impl<E: EthSpec> Network<E> {
                 // Poll the libp2p `Swarm`.
                 // This will poll the swarm and do maintenance routines.
                 Some(event) = self.swarm.next() => {
-                    if let Some(event) = self.parse_swarm_event(event) {
+            // Try convert to mallory event.This just passes some swarm events up to mallory,
+            // rather than processing here.
+            // Attempt passing swarm events up to Mallory
+            let swarm_event = match MallorySwarmEvent::try_from(event) {
+                Ok(ev) => return NetworkEvent::MallorySwarmEvent(ev),
+                Err(ev) => ev,
+            };
+
+                    if let Some(event) = self.parse_swarm_event(swarm_event) {
                         return event;
                     }
                 },
@@ -2102,6 +2151,31 @@ impl<E: EthSpec> Network<E> {
                     }
                 }
             }
+        }
+    }
+    #[instrument(parent = None,
+        level = "trace",
+        fields(service = "libp2p"),
+        name = "libp2p",
+        skip_all
+    )]
+    /// Publish a raw gossipsub RPC message to a specific target.
+    pub fn publish_raw_targeted(&mut self, msg: RawMessage, target: PeerId) {
+        if let Err(e) = self.gossipsub_mut().raw_publish_targeted(target, msg) {
+            warn!("error" = ?e, "Could not publish message");
+        }
+    }
+
+    #[instrument(parent = None,
+        level = "trace",
+        fields(service = "libp2p"),
+        name = "libp2p",
+        skip_all
+    )]
+    /// Publish a raw gossipsub RPC message to a specific target.
+    pub fn publish_raw(&mut self, msg: RawMessage, topic: Topic) {
+        if let Err(e) = self.gossipsub_mut().raw_publish(topic, msg) {
+            warn!("error" = ?e, "Could not publish message");
         }
     }
 

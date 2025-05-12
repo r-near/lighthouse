@@ -725,6 +725,7 @@ pub enum RequestType<E: EthSpec> {
     LightClientUpdatesByRange(LightClientUpdatesByRangeRequest),
     Ping(Ping),
     MetaData(MetadataRequest<E>),
+    Raw(RawRequest),
 }
 
 /// Implements the encoding per supported protocol for `RPCRequest`.
@@ -748,6 +749,7 @@ impl<E: EthSpec> RequestType<E> {
             RequestType::LightClientOptimisticUpdate => 1,
             RequestType::LightClientFinalityUpdate => 1,
             RequestType::LightClientUpdatesByRange(req) => req.count,
+            RequestType::Raw(_) => 1,
         }
     }
 
@@ -784,6 +786,7 @@ impl<E: EthSpec> RequestType<E> {
             RequestType::LightClientUpdatesByRange(_) => {
                 SupportedProtocol::LightClientUpdatesByRangeV1
             }
+            RequestType::Raw(r) => r.protocol,
         }
     }
 
@@ -807,6 +810,7 @@ impl<E: EthSpec> RequestType<E> {
             RequestType::LightClientFinalityUpdate => unreachable!(),
             RequestType::LightClientOptimisticUpdate => unreachable!(),
             RequestType::LightClientUpdatesByRange(_) => unreachable!(),
+            RequestType::Raw(_) => unreachable!(),
         }
     }
 
@@ -870,6 +874,7 @@ impl<E: EthSpec> RequestType<E> {
                 SupportedProtocol::LightClientUpdatesByRangeV1,
                 Encoding::SSZSnappy,
             )],
+            RequestType::Raw(req) => vec![ProtocolId::new(req.protocol, Encoding::SSZSnappy)],
         }
     }
 
@@ -889,6 +894,7 @@ impl<E: EthSpec> RequestType<E> {
             RequestType::LightClientOptimisticUpdate => true,
             RequestType::LightClientFinalityUpdate => true,
             RequestType::LightClientUpdatesByRange(_) => true,
+            RequestType::Raw(_) => true,
         }
     }
 }
@@ -1010,6 +1016,7 @@ impl<E: EthSpec> std::fmt::Display for RequestType<E> {
             RequestType::LightClientUpdatesByRange(_) => {
                 write!(f, "Light client updates by range request")
             }
+            RequestType::Raw(raw) => write!(f, "Raw: {}", raw),
         }
     }
 }
