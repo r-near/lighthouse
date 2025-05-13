@@ -4,6 +4,7 @@ mod latency;
 mod notifier;
 
 use crate::cli::ValidatorClient;
+use crate::duties_service::SelectionProofConfig;
 pub use config::Config;
 use initialized_validators::InitializedValidators;
 use metrics::set_gauge;
@@ -59,11 +60,13 @@ const WAITING_FOR_GENESIS_POLL_TIME: Duration = Duration::from_secs(12);
 const HTTP_ATTESTATION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT: u32 = 24;
+const HTTP_ATTESTATION_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For DVT involving middleware only
 const HTTP_LIVENESS_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_PROPOSAL_TIMEOUT_QUOTIENT: u32 = 2;
 const HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
+const HTTP_SYNC_AGGREGATOR_TIMEOUT_QUOTIENT: u32 = 24; // For DVT involving middleware only
 const HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
@@ -71,6 +74,22 @@ const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 
 const DOPPELGANGER_SERVICE_NAME: &str = "doppelganger";
+
+/// Compute attestation selection proofs this many slots before they are required.
+///
+/// At start-up selection proofs will be computed with less lookahead out of necessity.
+const SELECTION_PROOF_SLOT_LOOKAHEAD: u64 = 8;
+
+/// The attestation selection proof lookahead for those running with the --distributed flag.
+const SELECTION_PROOF_SLOT_LOOKAHEAD_DVT: u64 = 1;
+
+/// Fraction of a slot at which attestation selection proof signing should happen (2 means half way).
+const SELECTION_PROOF_SCHEDULE_DENOM: u32 = 2;
+
+/// Number of epochs in advance to compute sync selection proofs when not in `distributed` mode.
+pub const AGGREGATION_PRE_COMPUTE_EPOCHS: u64 = 2;
+/// Number of slots in advance to compute sync selection proofs when in `distributed` mode.
+pub const AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED: u64 = 1;
 
 type ValidatorStore<E> = LighthouseValidatorStore<SystemTimeSlotClock, E>;
 
@@ -297,12 +316,15 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
                     attester_duties: slot_duration / HTTP_ATTESTER_DUTIES_TIMEOUT_QUOTIENT,
                     attestation_subscriptions: slot_duration
                         / HTTP_ATTESTATION_SUBSCRIPTIONS_TIMEOUT_QUOTIENT,
+                    attestation_aggregators: slot_duration
+                        / HTTP_ATTESTATION_AGGREGATOR_TIMEOUT_QUOTIENT,
                     liveness: slot_duration / HTTP_LIVENESS_TIMEOUT_QUOTIENT,
                     proposal: slot_duration / HTTP_PROPOSAL_TIMEOUT_QUOTIENT,
                     proposer_duties: slot_duration / HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT,
                     sync_committee_contribution: slot_duration
                         / HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT,
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
+                    sync_aggregators: slot_duration / HTTP_SYNC_AGGREGATOR_TIMEOUT_QUOTIENT,
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
@@ -442,6 +464,41 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
             validator_store.prune_slashing_protection_db(slot.epoch(E::slots_per_epoch()), true);
         }
 
+        // Define a config to be pass to duties_service.
+        // The defined config here defaults to using selections_endpoint and parallel_sign (i.e., distributed mode)
+        // Other DVT applications, e.g., Anchor can pass in different configs to suit different needs.
+        let attestation_selection_proof_config = if config.distributed {
+            SelectionProofConfig {
+                lookahead_slot: SELECTION_PROOF_SLOT_LOOKAHEAD_DVT,
+                computation_offset: slot_clock.slot_duration() / SELECTION_PROOF_SCHEDULE_DENOM,
+                selections_endpoint: true,
+                parallel_sign: true,
+            }
+        } else {
+            SelectionProofConfig {
+                lookahead_slot: SELECTION_PROOF_SLOT_LOOKAHEAD,
+                computation_offset: slot_clock.slot_duration() / SELECTION_PROOF_SCHEDULE_DENOM,
+                selections_endpoint: false,
+                parallel_sign: false,
+            }
+        };
+
+        let sync_selection_proof_config = if config.distributed {
+            SelectionProofConfig {
+                lookahead_slot: AGGREGATION_PRE_COMPUTE_SLOTS_DISTRIBUTED,
+                computation_offset: Duration::default(),
+                selections_endpoint: true,
+                parallel_sign: true,
+            }
+        } else {
+            SelectionProofConfig {
+                lookahead_slot: E::slots_per_epoch() * AGGREGATION_PRE_COMPUTE_EPOCHS,
+                computation_offset: Duration::default(),
+                selections_endpoint: false,
+                parallel_sign: false,
+            }
+        };
+
         let duties_service = Arc::new(
             DutiesServiceBuilder::new()
                 .slot_clock(slot_clock.clone())
@@ -450,7 +507,8 @@ impl<E: EthSpec> ProductionValidatorClient<E> {
                 .spec(context.eth2_config.spec.clone())
                 .executor(context.executor.clone())
                 .enable_high_validator_count_metrics(config.enable_high_validator_count_metrics)
-                .distributed(config.distributed)
+                .attestation_selection_proof_config(attestation_selection_proof_config)
+                .sync_selection_proof_config(sync_selection_proof_config)
                 .disable_attesting(config.disable_attesting)
                 .build()?,
         );

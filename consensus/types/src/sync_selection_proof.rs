@@ -7,11 +7,13 @@ use crate::{
 };
 use ethereum_hashing::hash;
 use safe_arith::{ArithError, SafeArith};
+use serde::{Deserialize, Serialize};
 use ssz::Encode;
 use ssz_types::typenum::Unsigned;
 use std::cmp;
 
-#[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone)]
+#[derive(arbitrary::Arbitrary, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SyncSelectionProof(Signature);
 
 impl SyncSelectionProof {
