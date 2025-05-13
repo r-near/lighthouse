@@ -468,11 +468,16 @@ impl<E: EthSpec> MockBuilder<E> {
             .ok_or_else(|| "missing payload for tx root".to_string())?;
 
         let (payload, blobs) = payload.deconstruct();
+        debug!(
+            payload_type=%payload.fork_name(),
+            "Fork name for received payload"
+        );
         let full_block = block
             .try_into_full_block(Some(payload.clone()))
             .ok_or("Internal error, just provided a payload")?;
         debug!(
             txs_count = payload.transactions().len(),
+            fork = %full_block.fork_name_unchecked(),
             blob_count = blobs.as_ref().map(|b| b.commitments.len()),
             "Got full payload, sending to local beacon node for propagation"
         );

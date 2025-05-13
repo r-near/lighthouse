@@ -28,6 +28,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     Body, IntoUrl, RequestBuilder, Response,
 };
+use tracing::debug;
 pub use reqwest::{StatusCode, Url};
 use reqwest_eventsource::{Event, EventSource};
 pub use sensitive_url::{SensitiveError, SensitiveUrl};
@@ -1099,11 +1100,13 @@ impl BeaconNodeHttpClient {
         block_contents: &PublishBlockRequest<E>,
         validation_level: Option<BroadcastValidation>,
     ) -> Result<(), Error> {
+        let fork_name = block_contents.signed_block().message().body().fork_name();
+        debug!(%fork_name, "Posting beacon block");
         self.post_generic_with_consensus_version(
             self.post_beacon_blocks_v2_path(validation_level)?,
             block_contents,
             Some(self.timeouts.proposal),
-            block_contents.signed_block().message().body().fork_name(),
+            fork_name,
         )
         .await?;
 

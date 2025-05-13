@@ -2722,6 +2722,7 @@ dependencies = [
  "ssz_types",
  "test_random_derive",
  "tokio",
+ "tracing",
  "types",
  "zeroize",
 ]

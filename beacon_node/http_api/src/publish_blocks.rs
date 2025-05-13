@@ -99,7 +99,7 @@ pub async fn publish_block<T: BeaconChainTypes, B: IntoGossipVerifiedBlock<T>>(
     };
     let block = unverified_block.inner_block();
 
-    debug!(slot = %block.slot(), "Signed block received in HTTP API");
+    debug!(slot = %block.slot(), fork=%block.fork_name_unchecked(), provenance, "Signed block received in HTTP API");
 
     /* actually publish a block */
     let publish_block_p2p = move |block: Arc<SignedBeaconBlock<T::EthSpec>>,
