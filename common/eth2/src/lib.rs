@@ -135,15 +135,18 @@ pub struct Timeouts {
     pub attestation: Duration,
     pub attester_duties: Duration,
     pub attestation_subscriptions: Duration,
+    pub attestation_aggregators: Duration,
     pub liveness: Duration,
     pub proposal: Duration,
     pub proposer_duties: Duration,
     pub sync_committee_contribution: Duration,
     pub sync_duties: Duration,
+    pub sync_aggregators: Duration,
     pub get_beacon_blocks_ssz: Duration,
     pub get_debug_beacon_states: Duration,
     pub get_deposit_snapshot: Duration,
     pub get_validator_block: Duration,
+    pub default: Duration,
 }
 
 impl Timeouts {
@@ -152,15 +155,18 @@ impl Timeouts {
             attestation: timeout,
             attester_duties: timeout,
             attestation_subscriptions: timeout,
+            attestation_aggregators: timeout,
             liveness: timeout,
             proposal: timeout,
             proposer_duties: timeout,
             sync_committee_contribution: timeout,
             sync_duties: timeout,
+            sync_aggregators: timeout,
             get_beacon_blocks_ssz: timeout,
             get_debug_beacon_states: timeout,
             get_deposit_snapshot: timeout,
             get_validator_block: timeout,
+            default: timeout,
         }
     }
 }
@@ -235,7 +241,9 @@ impl BeaconNodeHttpClient {
         url: U,
         builder: impl FnOnce(RequestBuilder) -> RequestBuilder,
     ) -> Result<Response, Error> {
-        let response = builder(self.client.get(url)).send().await?;
+        let response = builder(self.client.get(url).timeout(self.timeouts.default))
+            .send()
+            .await?;
         ok_or_error(response).await
     }
 
@@ -398,11 +406,10 @@ impl BeaconNodeHttpClient {
         body: &T,
         timeout: Option<Duration>,
     ) -> Result<Response, Error> {
-        let mut builder = self.client.post(url);
-        if let Some(timeout) = timeout {
-            builder = builder.timeout(timeout);
-        }
-
+        let builder = self
+            .client
+            .post(url)
+            .timeout(timeout.unwrap_or(self.timeouts.default));
         let response = builder.json(body).send().await?;
         ok_or_error(response).await
     }
@@ -415,10 +422,10 @@ impl BeaconNodeHttpClient {
         timeout: Option<Duration>,
         fork: ForkName,
     ) -> Result<Response, Error> {
-        let mut builder = self.client.post(url);
-        if let Some(timeout) = timeout {
-            builder = builder.timeout(timeout);
-        }
+        let builder = self
+            .client
+            .post(url)
+            .timeout(timeout.unwrap_or(self.timeouts.default));
         let response = builder
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
             .json(body)
@@ -433,7 +440,7 @@ impl BeaconNodeHttpClient {
         url: U,
         body: &T,
     ) -> Result<Response, Error> {
-        let builder = self.client.post(url);
+        let builder = self.client.post(url).timeout(self.timeouts.default);
         let mut headers = HeaderMap::new();
 
         headers.insert(
@@ -452,10 +459,10 @@ impl BeaconNodeHttpClient {
         timeout: Option<Duration>,
         fork: ForkName,
     ) -> Result<Response, Error> {
-        let mut builder = self.client.post(url);
-        if let Some(timeout) = timeout {
-            builder = builder.timeout(timeout);
-        }
+        let builder = self
+            .client
+            .post(url)
+            .timeout(timeout.unwrap_or(self.timeouts.default));
         let mut headers = HeaderMap::new();
         headers.insert(
             CONSENSUS_VERSION_HEADER,
@@ -816,6 +823,26 @@ impl BeaconNodeHttpClient {
             .push("states")
             .push(&state_id.to_string())
             .push("pending_partial_withdrawals");
+
+        self.get_opt(path).await
+    }
+
+    /// `GET beacon/states/{state_id}/pending_consolidations`
+    ///
+    /// Returns `Ok(None)` on a 404 error.
+    pub async fn get_beacon_states_pending_consolidations(
+        &self,
+        state_id: StateId,
+    ) -> Result<Option<ExecutionOptimisticFinalizedResponse<Vec<PendingConsolidation>>>, Error>
+    {
+        let mut path = self.eth_path(V1)?;
+
+        path.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.server.clone()))?
+            .push("beacon")
+            .push("states")
+            .push(&state_id.to_string())
+            .push("pending_consolidations");
 
         self.get_opt(path).await
     }
@@ -1848,7 +1875,13 @@ impl BeaconNodeHttpClient {
             .push("node")
             .push("health");
 
-        let status = self.client.get(path).send().await?.status();
+        let status = self
+            .client
+            .get(path)
+            .timeout(self.timeouts.default)
+            .send()
+            .await?
+            .status();
         if status == StatusCode::OK || status == StatusCode::PARTIAL_CONTENT {
             Ok(status)
         } else {
@@ -2702,6 +2735,42 @@ impl BeaconNodeHttpClient {
             self.timeouts.sync_duties,
         )
         .await
+    }
+
+    /// `POST validator/beacon_committee_selections`
+    pub async fn post_validator_beacon_committee_selections(
+        &self,
+        selections: &[BeaconCommitteeSelection],
+    ) -> Result<GenericResponse<Vec<BeaconCommitteeSelection>>, Error> {
+        let mut path = self.eth_path(V1)?;
+
+        path.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.server.clone()))?
+            .push("validator")
+            .push("beacon_committee_selections");
+
+        self.post_with_timeout_and_response(
+            path,
+            &selections,
+            self.timeouts.attestation_aggregators,
+        )
+        .await
+    }
+
+    /// `POST validator/sync_committee_selections`
+    pub async fn post_validator_sync_committee_selections(
+        &self,
+        selections: &[SyncCommitteeSelection],
+    ) -> Result<GenericResponse<Vec<SyncCommitteeSelection>>, Error> {
+        let mut path = self.eth_path(V1)?;
+
+        path.path_segments_mut()
+            .map_err(|()| Error::InvalidUrl(self.server.clone()))?
+            .push("validator")
+            .push("sync_committee_selections");
+
+        self.post_with_timeout_and_response(path, &selections, self.timeouts.sync_aggregators)
+            .await
     }
 }
 

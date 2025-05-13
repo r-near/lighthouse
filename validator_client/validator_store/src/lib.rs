@@ -5,9 +5,8 @@ use types::{
     Address, Attestation, AttestationError, BeaconBlock, BlindedBeaconBlock, Epoch, EthSpec,
     Graffiti, Hash256, PublicKeyBytes, SelectionProof, Signature, SignedAggregateAndProof,
     SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
-    SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SyncCommitteeContribution,
-    SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
-    VoluntaryExit,
+    SignedValidatorRegistrationData, Slot, SyncCommitteeContribution, SyncCommitteeMessage,
+    SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -21,6 +20,7 @@ pub enum Error<T> {
     GreaterThanCurrentEpoch { epoch: Epoch, current_epoch: Epoch },
     UnableToSignAttestation(AttestationError),
     SpecificError(T),
+    Middleware(String),
 }
 
 impl<T> From<T> for Error<T> {
@@ -55,9 +55,9 @@ pub trait ValidatorStore: Send + Sync {
     /// are two primary functions used here:
     ///
     /// - `DoppelgangerStatus::only_safe`: only returns pubkeys which have passed doppelganger
-    ///     protection and are safe-enough to sign messages.
+    ///   protection and are safe-enough to sign messages.
     /// - `DoppelgangerStatus::ignored`: returns all the pubkeys from `only_safe` *plus* those still
-    ///     undergoing protection. This is useful for collecting duties or other non-signing tasks.
+    ///   undergoing protection. This is useful for collecting duties or other non-signing tasks.
     fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
     where
         I: FromIterator<PublicKeyBytes>,
@@ -108,12 +108,6 @@ pub trait ValidatorStore: Send + Sync {
         attestation: &mut Attestation<Self::E>,
         current_epoch: Epoch,
     ) -> impl Future<Output = Result<(), Error<Self::Error>>> + Send;
-
-    fn sign_voluntary_exit(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        voluntary_exit: VoluntaryExit,
-    ) -> impl Future<Output = Result<SignedVoluntaryExit, Error<Self::Error>>> + Send;
 
     fn sign_validator_registration_data(
         &self,

@@ -54,8 +54,8 @@ const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
 /// Currently used as the default gas limit in execution clients.
 ///
-/// https://github.com/ethereum/builder-specs/issues/17
-pub const DEFAULT_GAS_LIMIT: u64 = 30_000_000;
+/// https://ethresear.ch/t/on-increasing-the-block-gas-limit-technical-considerations-path-forward/21225.
+pub const DEFAULT_GAS_LIMIT: u64 = 36_000_000;
 
 pub struct LighthouseValidatorStore<T, E> {
     validators: Arc<RwLock<InitializedValidators>>,
@@ -341,7 +341,10 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ///
     /// 1. validator_definitions.yml
     /// 2. process level flag
-    pub fn get_builder_proposals(&self, validator_pubkey: &PublicKeyBytes) -> bool {
+    ///
+    /// This function is currently only used in tests because in prod it is translated and combined
+    /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
+    pub fn get_builder_proposals_testing_only(&self, validator_pubkey: &PublicKeyBytes) -> bool {
         // If there is a `suggested_fee_recipient` in the validator definitions yaml
         // file, use that value.
         self.get_builder_proposals_defaulting(
@@ -349,11 +352,23 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
         )
     }
 
+    fn get_builder_proposals_defaulting(&self, builder_proposals: Option<bool>) -> bool {
+        builder_proposals
+            // If there's nothing in the file, try the process-level default value.
+            .unwrap_or(self.builder_proposals)
+    }
+
     /// Returns a `u64` for the given public key that denotes the builder boost factor. The priority order for fetching this value is:
     ///
     /// 1. validator_definitions.yml
     /// 2. process level flag
-    pub fn get_builder_boost_factor(&self, validator_pubkey: &PublicKeyBytes) -> Option<u64> {
+    ///
+    /// This function is currently only used in tests because in prod it is translated and combined
+    /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
+    pub fn get_builder_boost_factor_testing_only(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Option<u64> {
         self.validators
             .read()
             .builder_boost_factor(validator_pubkey)
@@ -365,17 +380,17 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
     ///
     /// 1. validator_definitions.yml
     /// 2. process level flag
-    pub fn get_prefer_builder_proposals(&self, validator_pubkey: &PublicKeyBytes) -> bool {
+    ///
+    /// This function is currently only used in tests because in prod it is translated and combined
+    /// with other flags into a builder boost factor (see `determine_builder_boost_factor`).
+    pub fn get_prefer_builder_proposals_testing_only(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> bool {
         self.validators
             .read()
             .prefer_builder_proposals(validator_pubkey)
             .unwrap_or(self.prefer_builder_proposals)
-    }
-
-    fn get_builder_proposals_defaulting(&self, builder_proposals: Option<bool>) -> bool {
-        builder_proposals
-            // If there's nothing in the file, try the process-level default value.
-            .unwrap_or(self.builder_proposals)
     }
 
     pub fn import_slashing_protection(
@@ -509,6 +524,35 @@ impl<T: SlotClock + 'static, E: EthSpec> LighthouseValidatorStore<T, E> {
             }
         }
     }
+
+    pub async fn sign_voluntary_exit(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        voluntary_exit: VoluntaryExit,
+    ) -> Result<SignedVoluntaryExit, Error> {
+        let signing_epoch = voluntary_exit.epoch;
+        let signing_context = self.signing_context(Domain::VoluntaryExit, signing_epoch);
+        let signing_method = self.doppelganger_bypassed_signing_method(validator_pubkey)?;
+
+        let signature = signing_method
+            .get_signature::<E, BlindedPayload<E>>(
+                SignableMessage::VoluntaryExit(&voluntary_exit),
+                signing_context,
+                &self.spec,
+                &self.task_executor,
+            )
+            .await?;
+
+        validator_metrics::inc_counter_vec(
+            &validator_metrics::SIGNED_VOLUNTARY_EXITS_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(SignedVoluntaryExit {
+            message: voluntary_exit,
+            signature,
+        })
+    }
 }
 
 impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorStore<T, E> {
@@ -531,9 +575,9 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
     /// are two primary functions used here:
     ///
     /// - `DoppelgangerStatus::only_safe`: only returns pubkeys which have passed doppelganger
-    ///     protection and are safe-enough to sign messages.
+    ///   protection and are safe-enough to sign messages.
     /// - `DoppelgangerStatus::ignored`: returns all the pubkeys from `only_safe` *plus* those still
-    ///     undergoing protection. This is useful for collecting duties or other non-signing tasks.
+    ///   undergoing protection. This is useful for collecting duties or other non-signing tasks.
     #[allow(clippy::needless_collect)] // Collect is required to avoid holding a lock.
     fn voting_pubkeys<I, F>(&self, filter_func: F) -> I
     where
@@ -595,8 +639,12 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
         self.get_fee_recipient_defaulting(self.suggested_fee_recipient(validator_pubkey))
     }
 
-    /// Translate the per validator `builder_proposals`, `builder_boost_factor` and
-    /// `prefer_builder_proposals` to a boost factor, if available.
+    /// Translate the per validator and per process `builder_proposals`, `builder_boost_factor` and
+    /// `prefer_builder_proposals` configurations to a boost factor, if available.
+    ///
+    /// Priority is given to per-validator values, and then if no preference is established by
+    /// these the process-level defaults are used. For both types of config, the logic is the same:
+    ///
     /// - If `prefer_builder_proposals` is true, set boost factor to `u64::MAX` to indicate a
     ///   preference for builder payloads.
     /// - If `builder_boost_factor` is a value other than None, return its value as the boost factor.
@@ -627,18 +675,29 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
                 None
             });
 
-        factor.or_else(|| {
-            if self.prefer_builder_proposals {
-                return Some(u64::MAX);
-            }
-            self.builder_boost_factor.or({
-                if !self.builder_proposals {
-                    Some(0)
-                } else {
+        factor
+            .or_else(|| {
+                if self.prefer_builder_proposals {
+                    return Some(u64::MAX);
+                }
+                self.builder_boost_factor.or({
+                    if !self.builder_proposals {
+                        Some(0)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .and_then(|factor| {
+                // If builder boost factor is set to 100 it should be treated
+                // as None to prevent unnecessary calculations that could
+                // lead to loss of information.
+                if factor == 100 {
                     None
+                } else {
+                    Some(factor)
                 }
             })
-        })
     }
 
     async fn randao_reveal(
@@ -774,35 +833,6 @@ impl<T: SlotClock + 'static, E: EthSpec> ValidatorStore for LighthouseValidatorS
                 Err(Error::Slashable(e))
             }
         }
-    }
-
-    async fn sign_voluntary_exit(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        voluntary_exit: VoluntaryExit,
-    ) -> Result<SignedVoluntaryExit, Error> {
-        let signing_epoch = voluntary_exit.epoch;
-        let signing_context = self.signing_context(Domain::VoluntaryExit, signing_epoch);
-        let signing_method = self.doppelganger_bypassed_signing_method(validator_pubkey)?;
-
-        let signature = signing_method
-            .get_signature::<E, BlindedPayload<E>>(
-                SignableMessage::VoluntaryExit(&voluntary_exit),
-                signing_context,
-                &self.spec,
-                &self.task_executor,
-            )
-            .await?;
-
-        validator_metrics::inc_counter_vec(
-            &validator_metrics::SIGNED_VOLUNTARY_EXITS_TOTAL,
-            &[validator_metrics::SUCCESS],
-        );
-
-        Ok(SignedVoluntaryExit {
-            message: voluntary_exit,
-            signature,
-        })
     }
 
     async fn sign_validator_registration_data(
