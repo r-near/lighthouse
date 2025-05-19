@@ -311,15 +311,13 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
     };
     migrate_ops.push(pruning_checkpoint.as_kv_store_op(PRUNING_CHECKPOINT_KEY));
 
-    // TODO(tree-states): What about the anchor_slot? Is it safe to run the prior version of
-    // Lighthouse with an a higher anchor_slot than expected?
-
+    // Convert state summaries back to the old format.
     for (state_root, summary) in state_summaries_dag
         .summaries_by_slot_ascending()
         .into_iter()
         .flat_map(|(_, summaries)| summaries)
     {
-        // If boundary state persist.
+        // If boundary state: persist.
         // Do not cache these states as they are unlikely to be relevant later.
         let update_cache = false;
         if summary.slot % T::EthSpec::slots_per_epoch() == 0 {
@@ -327,15 +325,15 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
                 .load_hot_state(&state_root, update_cache)?
                 .ok_or(Error::MissingState(state_root))?;
 
-            // Immediately commit the state. Otherwise we will OOM and it's stored in a different
-            // column. So if the migration crashes we just get extra harmless junk in the DB.
+            // Immediately commit the state, so we don't OOM. It's stored in a different
+            // column so if the migration crashes we'll just store extra harmless junk in the DB.
             let mut state_write_ops = vec![];
             store_full_state_v22(&state_root, &state, &mut state_write_ops)?;
             db.hot_db.do_atomically(state_write_ops)?;
             states_written += 1;
         }
 
-        // Persist old summary
+        // Persist old summary.
         let epoch_boundary_state_slot = summary.slot - summary.slot % T::EthSpec::slots_per_epoch();
         let old_summary = HotStateSummaryV22 {
             slot: summary.slot,
