@@ -383,7 +383,9 @@ where
     pub fn genesis_state(mut self, mut beacon_state: BeaconState<E>) -> Result<Self, String> {
         let store = self.store.clone().ok_or("genesis_state requires a store")?;
 
-        // Initialize anchor info before attempting to write the genesis state
+        // Initialize anchor info before attempting to write the genesis state.
+        // Since v4.4.0 we will set the anchor with a dummy state upper limit in order to prevent
+        // historic states from being retained (unless `--reconstruct-historic-states` is set).
         let retain_historic_states = self.chain_config.reconstruct_historic_states;
         let genesis_beacon_block = genesis_block(&mut beacon_state, &self.spec)?;
         self.pending_io_batch.push(
@@ -401,8 +403,6 @@ where
         self = updated_builder;
 
         // Stage the database's metadata fields for atomic storage when `build` is called.
-        // Since v4.4.0 we will set the anchor with a dummy state upper limit in order to prevent
-        // historic states from being retained (unless `--reconstruct-historic-states` is set).
         self.pending_io_batch.push(
             store
                 .init_blob_info(genesis.beacon_block.slot())
@@ -550,7 +550,7 @@ where
         );
 
         // Write the anchor to memory before calling `put_state` otherwise hot hdiff can't store
-        // states that do not align with the start_slot grid
+        // states that do not align with the `start_slot` grid.
         let retain_historic_states = self.chain_config.reconstruct_historic_states;
         self.pending_io_batch.push(
             store

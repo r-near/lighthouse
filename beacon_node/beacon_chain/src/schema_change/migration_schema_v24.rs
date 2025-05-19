@@ -16,6 +16,35 @@ use store::{
 use tracing::{debug, info, warn};
 use types::{EthSpec, Hash256, Slot};
 
+/// We stopped using the pruning checkpoint in schema v23 but never explicitly deleted it.
+///
+/// We delete it as part of the v24 migration.
+pub const PRUNING_CHECKPOINT_KEY: Hash256 = Hash256::repeat_byte(3);
+
+/// The checkpoint used for pruning the database.
+///
+/// Updated whenever pruning is successful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PruningCheckpoint {
+    pub checkpoint: Checkpoint,
+}
+
+impl StoreItem for PruningCheckpoint {
+    fn db_column() -> DBColumn {
+        DBColumn::BeaconMeta
+    }
+
+    fn as_store_bytes(&self) -> Vec<u8> {
+        self.checkpoint.as_ssz_bytes()
+    }
+
+    fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(PruningCheckpoint {
+            checkpoint: Checkpoint::from_ssz_bytes(bytes)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Encode, Decode)]
 pub struct HotStateSummaryV22 {
     slot: Slot,
@@ -29,6 +58,12 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     let mut migrate_ops = vec![];
     let split = db.get_split_info();
     let hot_hdiff_start_slot = split.slot;
+
+    // Delete the `PruningCheckpoint` (no longer used).
+    migrate_ops.push(KeyValueStoreOp::DeleteKey(
+        DBColumn::BeaconMeta,
+        PRUNING_CHECKPOINT_KEY,
+    ));
 
     // Sanity check to make sure the HDiff grid is aligned with the epoch start
     if hot_hdiff_start_slot % T::EthSpec::slots_per_epoch() != 0 {
@@ -265,6 +300,12 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
     let mut states_written = 0;
     let mut summaries_written = 0;
     let mut last_log_time = Instant::now();
+
+    // Rebuild the PruningCheckpoint from the split.
+    let split = db.get_split_info();
+    let pruning_checkpoint = PruningCheckpoint {
+        checkpoint: Checkpoint {},
+    };
 
     // TODO(tree-states): What about the anchor_slot? Is it safe to run the prior version of
     // Lighthouse with an a higher anchor_slot than expected?
