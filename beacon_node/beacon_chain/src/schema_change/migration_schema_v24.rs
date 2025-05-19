@@ -14,7 +14,7 @@ use store::{
     KeyValueStoreOp, StoreItem,
 };
 use tracing::{debug, info, warn};
-use types::{EthSpec, Hash256, Slot};
+use types::{Checkpoint, EthSpec, Hash256, Slot};
 
 /// We stopped using the pruning checkpoint in schema v23 but never explicitly deleted it.
 ///
@@ -62,7 +62,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     // Delete the `PruningCheckpoint` (no longer used).
     migrate_ops.push(KeyValueStoreOp::DeleteKey(
         DBColumn::BeaconMeta,
-        PRUNING_CHECKPOINT_KEY,
+        PRUNING_CHECKPOINT_KEY.as_slice().to_vec(),
     ));
 
     // Sanity check to make sure the HDiff grid is aligned with the epoch start
@@ -304,8 +304,12 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
     // Rebuild the PruningCheckpoint from the split.
     let split = db.get_split_info();
     let pruning_checkpoint = PruningCheckpoint {
-        checkpoint: Checkpoint {},
+        checkpoint: Checkpoint {
+            epoch: split.slot.epoch(T::EthSpec::slots_per_epoch()),
+            root: split.block_root,
+        },
     };
+    migrate_ops.push(pruning_checkpoint.as_kv_store_op(PRUNING_CHECKPOINT_KEY));
 
     // TODO(tree-states): What about the anchor_slot? Is it safe to run the prior version of
     // Lighthouse with an a higher anchor_slot than expected?
