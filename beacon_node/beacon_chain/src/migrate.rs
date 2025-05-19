@@ -576,7 +576,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> BackgroundMigrator<E, Ho
                 new_finalized_state_root = ?new_finalized_state_root,
                 split_prior_to_migration_slot = %split_prior_to_migration.slot,
                 state_summaries_dag_roots_post_split = ?state_summaries_dag_roots_post_split,
-                "Prune state summaries dag found more than one root"
+                error = "summaries dag found more than one root",
+                "Notify the devs your hot DB has some inconsistency. Pruning will fix it but devs want to know about it",
             );
         }
 
