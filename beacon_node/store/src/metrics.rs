@@ -142,48 +142,6 @@ pub static BEACON_STATE_HOT_GET_COUNT: LazyLock<Result<IntCounter>> = LazyLock::
         "Total number of hot beacon states requested from the store (cache or DB)",
     )
 });
-pub static BEACON_STATE_READ_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
-    try_create_histogram(
-        "store_beacon_state_read_seconds",
-        "Total time required to read a BeaconState from the database",
-    )
-});
-pub static BEACON_STATE_READ_OVERHEAD_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
-    try_create_histogram(
-        "store_beacon_state_read_overhead_seconds",
-        "Overhead on reading a beacon state from the DB (e.g., decoding)",
-    )
-});
-pub static BEACON_STATE_READ_COUNT: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
-    try_create_int_counter(
-        "store_beacon_state_read_total",
-        "Total number of beacon state reads from the DB",
-    )
-});
-pub static BEACON_STATE_READ_BYTES: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
-    try_create_int_counter(
-        "store_beacon_state_read_bytes_total",
-        "Total number of beacon state bytes read from the DB",
-    )
-});
-pub static BEACON_STATE_WRITE_OVERHEAD_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
-    try_create_histogram(
-        "store_beacon_state_write_overhead_seconds",
-        "Overhead on writing a beacon state to the DB (e.g., encoding)",
-    )
-});
-pub static BEACON_STATE_WRITE_COUNT: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
-    try_create_int_counter(
-        "store_beacon_state_write_total",
-        "Total number of beacon state writes the DB",
-    )
-});
-pub static BEACON_STATE_WRITE_BYTES: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
-    try_create_int_counter(
-        "store_beacon_state_write_bytes_total",
-        "Total number of beacon state bytes written to the DB",
-    )
-});
 pub static BEACON_HDIFF_READ_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
     try_create_histogram(
         "store_hdiff_read_seconds",
