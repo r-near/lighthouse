@@ -1475,7 +1475,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                 let state_root = state.update_tree_hash_cache()?;
 
                 // Store the state immediately. States are ONLY deleted on finalization pruning, so
-                // we won't have race conditions where we should have writen a state and didn't.
+                // we won't have race conditions where we should have written a state and didn't.
                 let state_already_exists =
                     chain.store.load_hot_state_summary(&state_root)?.is_some();
 

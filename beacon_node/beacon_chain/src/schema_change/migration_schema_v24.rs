@@ -61,9 +61,6 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
     // We compute the state summaries DAG outside of a DB migration. Therefore if the DB is properly
     // prunned, it should have a single root equal to the split.
-    //
-    // TODO(hdiff): To assert this conditions, now we just log warns. We may want to switch to
-    // errors later if it can affect correctness when migrating the summaries.
     let state_summaries_dag_roots = state_summaries_dag.tree_roots();
     if state_summaries_dag_roots.len() == 1 {
         let (root_summary_state_root, root_summary) =
