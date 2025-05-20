@@ -289,8 +289,8 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
         // stop and restart correctly. This needs to occur *before* running any migrations
         // because some migrations load states and depend on the split.
         //
-        // V23: `load_split` needs to load a hot state summary, which need to be migrated from V22
-        // to V23. Attempting to `load_split` here before the migration will trigger an SSZ decode
+        // V24: `load_split` needs to load a hot state summary, which need to be migrated from V22
+        // to V24. Attempting to `load_split` here before the migration will trigger an SSZ decode
         // error. Instead we load the partial split, and load the full split after the migration.
         if let Some(split) = db.load_split_partial()? {
             *db.split.write() = split;
