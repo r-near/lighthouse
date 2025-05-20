@@ -1711,13 +1711,13 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
     fn load_hot_hdiff(&self, state_root: Hash256) -> Result<HDiff, Error> {
         let bytes = {
-            let _t = metrics::start_timer(&metrics::BEACON_HDIFF_READ_TIMES);
+            let _t = metrics::start_timer(&metrics::BEACON_HOT_HDIFF_READ_TIMES);
             self.hot_db
                 .get_bytes(DBColumn::BeaconStateHotDiff, state_root.as_slice())?
                 .ok_or(HotColdDBError::MissingHotHDiff(state_root))?
         };
         let hdiff = {
-            let _t = metrics::start_timer(&metrics::BEACON_HDIFF_DECODE_TIMES);
+            let _t = metrics::start_timer(&metrics::BEACON_HOT_HDIFF_DECODE_TIMES);
             HDiff::from_ssz_bytes(&bytes)?
         };
         Ok(hdiff)
@@ -2165,13 +2165,13 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
     fn load_hdiff_for_slot(&self, slot: Slot) -> Result<HDiff, Error> {
         let bytes = {
-            let _t = metrics::start_timer(&metrics::BEACON_HDIFF_READ_TIMES);
+            let _t = metrics::start_timer(&metrics::BEACON_COLD_HDIFF_READ_TIMES);
             self.cold_db
                 .get_bytes(DBColumn::BeaconStateDiff, &slot.as_u64().to_be_bytes())?
                 .ok_or(HotColdDBError::MissingHDiff(slot))?
         };
         let hdiff = {
-            let _t = metrics::start_timer(&metrics::BEACON_HDIFF_DECODE_TIMES);
+            let _t = metrics::start_timer(&metrics::BEACON_COLD_HDIFF_DECODE_TIMES);
             HDiff::from_ssz_bytes(&bytes)?
         };
         Ok(hdiff)

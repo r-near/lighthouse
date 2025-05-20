@@ -142,24 +142,38 @@ pub static BEACON_STATE_HOT_GET_COUNT: LazyLock<Result<IntCounter>> = LazyLock::
         "Total number of hot beacon states requested from the store (cache or DB)",
     )
 });
-pub static BEACON_HDIFF_READ_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+pub static BEACON_HOT_HDIFF_READ_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
     try_create_histogram(
-        "store_hdiff_read_seconds",
+        "store_hot_hdiff_read_seconds",
+        "Time required to read hierarchical diff bytes from the hot database",
+    )
+});
+pub static BEACON_HOT_HDIFF_DECODE_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "store_hot_hdiff_decode_seconds",
+        "Time required to decode hierarchical diff bytes from the hot database",
+    )
+});
+pub static BEACON_COLD_HDIFF_READ_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "store_cold_hdiff_read_seconds",
         "Time required to read the hierarchical diff bytes from the database",
     )
 });
-pub static BEACON_HDIFF_DECODE_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+pub static BEACON_COLD_HDIFF_DECODE_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
     try_create_histogram(
-        "store_hdiff_decode_seconds",
+        "store_cold_hdiff_decode_seconds",
         "Time required to decode hierarchical diff bytes",
     )
 });
-pub static BEACON_HDIFF_BUFFER_CLONE_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
-    try_create_histogram(
-        "store_hdiff_buffer_clone_seconds",
-        "Time required to clone hierarchical diff buffer bytes",
-    )
-});
+pub static BEACON_COLD_HDIFF_BUFFER_CLONE_TIMES: LazyLock<Result<Histogram>> =
+    LazyLock::new(|| {
+        try_create_histogram(
+            "store_cold_hdiff_buffer_clone_seconds",
+            "Time required to clone hierarchical diff buffer bytes",
+        )
+    });
+// This metric is not split hot/cold because it is recorded in a place where that info is not known.
 pub static BEACON_HDIFF_BUFFER_APPLY_RESIZES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
     try_create_histogram_with_buckets(
         "store_hdiff_buffer_apply_resizes",
