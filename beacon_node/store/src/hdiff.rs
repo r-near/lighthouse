@@ -731,7 +731,7 @@ impl HierarchyModuli {
         )
     }
 
-    /// For each layer, returns the closest diff less that or equal to `slot`.
+    /// For each layer, returns the closest diff less than or equal to `slot`.
     pub fn closest_layer_points(&self, slot: Slot, start_slot: Slot) -> Vec<Slot> {
         self.moduli
             .iter()
@@ -990,5 +990,81 @@ mod tests {
                 238, 238, 238, 238, 238, 238, 238, 238, 238, 238, 238, 238, 238, 4, 0, 0, 0
             ]
         );
+    }
+
+    // Test that the diffs and snapshots required for storage of split states are retained in the
+    // hot DB as the split slot advances, if we begin from an initial configuration where this
+    // invariant holds.
+    fn test_slots_retained_invariant(hierarchy: HierarchyModuli, start_slot: u64, epoch_jump: u64) {
+        let start_slot = Slot::new(start_slot);
+        let mut finalized_slot = start_slot;
+
+        // Initially we have just one snapshot stored at the `start_slot`. This is what checkpoint
+        // sync sets up (or the V24 migration).
+        let mut retained_slots = vec![finalized_slot];
+
+        // Iterate until we've reached two snapshots in the future.
+        let stop_at = hierarchy
+            .next_snapshot_slot(hierarchy.next_snapshot_slot(start_slot).unwrap() + 1)
+            .unwrap();
+
+        while finalized_slot <= stop_at {
+            // Jump multiple epocsh at a time because inter-epoch states are not interesting and
+            // would take too long to iterate over.
+            let new_finalized_slot = finalized_slot + 32 * epoch_jump;
+
+            let new_retained_slots = hierarchy.closest_layer_points(new_finalized_slot, start_slot);
+
+            for slot in &new_retained_slots {
+                // All new retained slots must either be already stored prior to the old finalized
+                // slot, OR newer than the finalized slot (i.e. stored in the hot DB as part of
+                // regular state storage).
+                assert!(retained_slots.contains(slot) || *slot >= finalized_slot);
+            }
+
+            retained_slots = new_retained_slots;
+            finalized_slot = new_finalized_slot;
+        }
+    }
+
+    #[test]
+    fn slots_retained_invariant() {
+        let cases = [
+            // Default hierarchy with a start_slot between the 2^13 and 2^16 layers.
+            (
+                HierarchyConfig::default().to_moduli().unwrap(),
+                2 * (1 << 14) - 5 * 32,
+                1,
+            ),
+            // Default hierarchy with a start_slot between the 2^13 and 2^16 layers, with 8 epochs
+            // finalizing at a time (should not make any difference).
+            (
+                HierarchyConfig::default().to_moduli().unwrap(),
+                2 * (1 << 14) - 5 * 32,
+                8,
+            ),
+            // Very dense hierarchy config.
+            (
+                HierarchyConfig::from_str("5,7")
+                    .unwrap()
+                    .to_moduli()
+                    .unwrap(),
+                32,
+                1,
+            ),
+            // Very dense hierarchy config that skips a whole snapshot on its first finalization.
+            (
+                HierarchyConfig::from_str("5,7")
+                    .unwrap()
+                    .to_moduli()
+                    .unwrap(),
+                32,
+                1 << 7,
+            ),
+        ];
+
+        for (hierarchy, start_slot, epoch_jump) in cases {
+            test_slots_retained_invariant(hierarchy, start_slot, epoch_jump);
+        }
     }
 }
