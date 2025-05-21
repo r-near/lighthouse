@@ -221,8 +221,8 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     );
 
     // Upgrade all hot DB state summaries to the new type:
-    // - Set all summaries of boundary states as `Snapshot` type
-    // - Set all others are `Replay` pointing to `epoch_boundary_state_root`
+    // - Set all summaries of boundary states to `Snapshot` type
+    // - Set all others to `Replay` pointing to `epoch_boundary_state_root`
 
     let mut diffs_written = 0;
     let mut summaries_written = 0;
