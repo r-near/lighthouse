@@ -1744,10 +1744,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         }) = self.load_hot_state_summary(state_root)?
         {
             let mut state = match self.hot_storage_strategy(slot)? {
-                StorageStrategy::Snapshot | StorageStrategy::DiffFrom(_) => {
+                strat @ StorageStrategy::Snapshot | strat @ StorageStrategy::DiffFrom(_) => {
                     let buffer = self.load_hot_hdiff_buffer(*state_root).map_err(|e| {
                         Error::LoadingHotHdiffBufferError(
-                            format!("load state DiffFrom {slot}"),
+                            format!("load state {strat:?} {slot}"),
                             *state_root,
                             e.into(),
                         )
