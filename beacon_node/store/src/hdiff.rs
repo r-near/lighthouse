@@ -733,14 +733,22 @@ impl HierarchyModuli {
 
     /// For each layer, returns the closest diff less than or equal to `slot`.
     pub fn closest_layer_points(&self, slot: Slot, start_slot: Slot) -> Vec<Slot> {
-        self.moduli
+        let mut layers = self
+            .moduli
             .iter()
             .map(|&n| {
                 let from = slot / n * n;
                 // Or from start point
                 std::cmp::max(from, start_slot)
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        // Remove duplication caused by the capping at `start_slot` (multiple
+        // layers may have the same slot equal to `start_slot`), or shared multiples (a slot that is
+        // a multiple of 2**n will also be a multiple of 2**m for all m < n).
+        layers.dedup();
+
+        layers
     }
 }
 
@@ -1065,6 +1073,19 @@ mod tests {
 
         for (hierarchy, start_slot, epoch_jump) in cases {
             test_slots_retained_invariant(hierarchy, start_slot, epoch_jump);
+        }
+    }
+
+    #[test]
+    fn closest_layer_points_unique() {
+        let hierarchy = HierarchyConfig::default().to_moduli().unwrap();
+
+        let start_slot = Slot::new(0);
+        let end_slot = hierarchy.next_snapshot_slot(Slot::new(1)).unwrap();
+
+        for slot in (0..end_slot.as_u64()).map(Slot::new) {
+            let closest_layer_points = hierarchy.closest_layer_points(slot, start_slot);
+            assert!(closest_layer_points.is_sorted_by(|a, b| a > b));
         }
     }
 }

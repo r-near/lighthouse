@@ -166,17 +166,67 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
     //
     // If the node has been running for a while the `anchor_slot` might be less than the finalized
     // checkpoint. This upgrade constructs a grid only with unfinalized states, rooted in the
-    // current finalize state. So we set the `anchor_slot` to `split.slot` to root the grid in the
+    // current finalized state. So we set the `anchor_slot` to `split.slot` to root the grid in the
     // current finalized state. Each migration sets the split to
     // ```
     // Split { slot: finalized_state.slot(), state_root: finalized_state_root }
     // ```
     {
         let anchor_info = db.get_anchor_info();
-        let mut new_anchor_info = anchor_info.clone();
-        new_anchor_info.anchor_slot = hot_hdiff_start_slot;
-        // Update the anchor in disk atomically if migration is successful
-        migrate_ops.push(db.compare_and_set_anchor_info(anchor_info, new_anchor_info)?);
+
+        // If the node is already an archive node, we can set the anchor slot to 0 and copy
+        // snapshots and diffs from the freezer DB to the hot DB in order to establish an initial
+        // hot grid that is aligned/"perfect" (no `start_slot`/`anchor_slot` to worry about).
+        let dummy_start_slot = Slot::new(0);
+        let closest_layer_points = db
+            .hierarchy
+            .closest_layer_points(split.slot, dummy_start_slot);
+
+        let previous_snapshot_slot =
+            closest_layer_points
+                .iter()
+                .copied()
+                .min()
+                .ok_or(Error::MigrationError(
+                    "closest_layer_points must not be empty".to_string(),
+                ))?;
+
+        // If we have the previous snapshot stored in the freezer DB, then we can use this
+        // optimisation.
+        if previous_snapshot_slot >= anchor_info.state_upper_limit {
+            info!(
+                %previous_snapshot_slot,
+                split_slot = %split.slot,
+                "Aligning hot diff grid to freezer"
+            );
+
+            // Set anchor slot to 0 in case it was set to something else by a previous checkpoint
+            // sync.
+            let mut new_anchor_info = anchor_info.clone();
+            new_anchor_info.anchor_slot = Slot::new(0);
+
+            // Update the anchor on disk atomically if migration is successful
+            migrate_ops.push(db.compare_and_set_anchor_info(anchor_info, new_anchor_info)?);
+
+            // Copy each of the freezer layers to the hot DB in slot ascending order.
+            for layer_slot in closest_layer_points.into_iter().rev() {
+                let mut freezer_state = db.load_cold_state_by_slot(layer_slot)?;
+
+                let state_root = freezer_state.canonical_root()?;
+
+                let mut state_ops = vec![];
+                db.store_hot_state(&state_root, &freezer_state, &mut state_ops)?;
+                db.hot_db.do_atomically(state_ops)?;
+            }
+        } else {
+            // Otherwise for non-archive nodes, set the anchor slot for the hot grid to the current
+            // split slot (the oldest slot available).
+            let mut new_anchor_info = anchor_info.clone();
+            new_anchor_info.anchor_slot = hot_hdiff_start_slot;
+
+            // Update the anchor in disk atomically if migration is successful
+            migrate_ops.push(db.compare_and_set_anchor_info(anchor_info, new_anchor_info)?);
+        }
     }
 
     let state_summaries_dag = new_dag::<T>(&db)?;
