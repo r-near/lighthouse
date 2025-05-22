@@ -98,13 +98,13 @@ impl<T: BeaconChainTypes> Sampling<T> {
                 // TODO(das): Should track failed sampling request for some time? Otherwise there's
                 // a risk of a loop with multiple triggers creating the request, then failing,
                 // and repeat.
-                debug!(?id, "Ignoring duplicate sampling request");
+                debug!(%id, "Ignoring duplicate sampling request");
                 return None;
             }
         };
 
         debug!(
-            ?id,
+            %id,
             column_selection = ?request.column_selection(),
             "Created new sample request"
         );
@@ -138,7 +138,7 @@ impl<T: BeaconChainTypes> Sampling<T> {
     ) -> Option<(SamplingRequester, SamplingResult)> {
         let Some(request) = self.requests.get_mut(&id.id) else {
             // TOOD(das): This log can happen if the request is error'ed early and dropped
-            debug!(?id, "Sample downloaded event for unknown request");
+            debug!(%id, "Sample downloaded event for unknown request");
             return None;
         };
 
@@ -167,7 +167,7 @@ impl<T: BeaconChainTypes> Sampling<T> {
     ) -> Option<(SamplingRequester, SamplingResult)> {
         let Some(request) = self.requests.get_mut(&id.id) else {
             // TOOD(das): This log can happen if the request is error'ed early and dropped
-            debug!(?id, "Sample verified event for unknown request");
+            debug!(%id, "Sample verified event for unknown request");
             return None;
         };
 
@@ -191,7 +191,7 @@ impl<T: BeaconChainTypes> Sampling<T> {
     ) -> Option<(SamplingRequester, SamplingResult)> {
         let result = result.transpose();
         if let Some(result) = result {
-            debug!(?id, ?result, "Sampling request completed, removing");
+            debug!(%id, ?result, "Sampling request completed, removing");
             metrics::inc_counter_vec(
                 &metrics::SAMPLING_REQUEST_RESULT,
                 &[metrics::from_result(&result)],
@@ -570,7 +570,7 @@ impl<T: BeaconChainTypes> ActiveSamplingRequest<T> {
         // Send requests.
         let mut sent_request = false;
         for (peer_id, column_indexes) in column_indexes_to_request {
-            cx.data_column_lookup_request(
+            cx.data_columns_by_root_request(
                 DataColumnsByRootRequester::Sampling(SamplingId {
                     id: self.requester_id,
                     sampling_request_id: self.current_sampling_request_id,

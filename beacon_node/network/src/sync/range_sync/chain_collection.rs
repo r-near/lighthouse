@@ -54,6 +54,13 @@ pub struct ChainCollection<T: BeaconChainTypes> {
 }
 
 impl<T: BeaconChainTypes> ChainCollection<T> {
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &SyncingChain<T>> {
+        self.finalized_chains
+            .values()
+            .chain(self.head_chains.values())
+    }
+
     pub fn new(beacon_chain: Arc<BeaconChain<T>>) -> Self {
         ChainCollection {
             beacon_chain,

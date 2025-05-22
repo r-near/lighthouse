@@ -9,10 +9,9 @@ mod sync_type;
 
 pub use batch::{
     BatchConfig, BatchInfo, BatchOperationOutcome, BatchPeers, BatchProcessingResult, BatchState,
-    ByRangeRequestType,
 };
-pub use chain::{BatchId, ChainId, EPOCHS_PER_BATCH};
 #[cfg(test)]
-pub use chain_collection::SyncChainStatus;
+pub use chain::BatchStateSummary;
+pub use chain::{BatchId, ChainId, EPOCHS_PER_BATCH};
 pub use range::RangeSync;
 pub use sync_type::RangeSyncType;

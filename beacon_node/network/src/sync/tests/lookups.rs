@@ -35,7 +35,7 @@ use lighthouse_network::{
         SamplingRequester, SingleLookupReqId, SyncRequestId,
     },
     types::SyncState,
-    NetworkConfig, NetworkGlobals, PeerId,
+    NetworkConfig, NetworkGlobals, PeerId, SyncInfo,
 };
 use slot_clock::{SlotClock, TestingSlotClock};
 use tokio::sync::mpsc;
@@ -53,8 +53,21 @@ const SAMPLING_REQUIRED_SUCCESSES: usize = 2;
 type DCByRootIds = Vec<DCByRootId>;
 type DCByRootId = (SyncRequestId, Vec<ColumnIndex>);
 
+pub enum PeersConfig {
+    SupernodeAndRandom,
+    SupernodeOnly,
+}
+
 impl TestRig {
     pub fn test_setup() -> Self {
+        Self::test_setup_with_options(false)
+    }
+
+    pub fn test_setup_as_supernode() -> Self {
+        Self::test_setup_with_options(true)
+    }
+
+    fn test_setup_with_options(is_supernode: bool) -> Self {
         // Use `fork_from_env` logic to set correct fork epochs
         let spec = test_spec::<E>();
 
@@ -83,10 +96,11 @@ impl TestRig {
         // TODO(das): make the generation of the ENR use the deterministic rng to have consistent
         // column assignments
         let network_config = Arc::new(NetworkConfig::default());
-        let globals = Arc::new(NetworkGlobals::new_test_globals(
+        let globals = Arc::new(NetworkGlobals::new_test_globals_as_supernode(
             Vec::new(),
             network_config,
             chain.spec.clone(),
+            is_supernode,
         ));
         let (beacon_processor, beacon_processor_rx) = NetworkBeaconProcessor::null_for_testing(
             globals,
@@ -113,6 +127,7 @@ impl TestRig {
             network_rx,
             network_rx_queue: vec![],
             sync_rx,
+            sent_blocks_by_range: <_>::default(),
             rng,
             network_globals: beacon_processor.network_globals.clone(),
             sync_manager: SyncManager::new(
@@ -244,8 +259,8 @@ impl TestRig {
         self.sync_manager.active_parent_lookups().len()
     }
 
-    fn active_range_sync_chain(&self) -> (RangeSyncType, Slot, Slot) {
-        self.sync_manager.get_range_sync_chains().unwrap().unwrap()
+    fn active_range_sync_chain(&mut self) -> (RangeSyncType, Slot, Slot) {
+        self.sync_manager.range_sync().state().unwrap().unwrap()
     }
 
     fn assert_single_lookups_count(&self, count: usize) {
@@ -355,27 +370,61 @@ impl TestRig {
         self.expect_empty_network();
     }
 
-    pub fn new_connected_peer(&mut self) -> PeerId {
+    // Don't make pub, use `add_connected_peer_testing_only`
+    fn new_connected_peer(&mut self) -> PeerId {
+        self.add_connected_peer_testing_only(false)
+    }
+
+    // Don't make pub, use `add_connected_peer_testing_only`
+    fn new_connected_supernode_peer(&mut self) -> PeerId {
+        self.add_connected_peer_testing_only(true)
+    }
+
+    pub fn add_connected_peer_testing_only(&mut self, supernode: bool) -> PeerId {
         let key = self.determinstic_key();
         let peer_id = self
             .network_globals
             .peers
             .write()
-            .__add_connected_peer_testing_only(false, &self.harness.spec, key);
-        self.log(&format!("Added new peer for testing {peer_id:?}"));
+            .__add_connected_peer_testing_only(supernode, &self.harness.spec, key);
+        let mut peer_custody_subnets = self
+            .network_globals
+            .peers
+            .read()
+            .peer_info(&peer_id)
+            .expect("peer was just added")
+            .custody_subnets_iter()
+            .map(|subnet| **subnet)
+            .collect::<Vec<_>>();
+        peer_custody_subnets.sort_unstable();
+        self.log(&format!(
+            "Added new peer for testing {peer_id:?} custody subnets {peer_custody_subnets:?}"
+        ));
         peer_id
     }
 
-    pub fn new_connected_supernode_peer(&mut self) -> PeerId {
-        let key = self.determinstic_key();
-        self.network_globals
-            .peers
-            .write()
-            .__add_connected_peer_testing_only(true, &self.harness.spec, key)
+    pub fn add_sync_peer(&mut self, supernode: bool, remote_info: SyncInfo) -> PeerId {
+        let peer_id = self.add_connected_peer_testing_only(supernode);
+        self.send_sync_message(SyncMessage::AddPeer(peer_id, remote_info));
+        peer_id
     }
 
     fn determinstic_key(&mut self) -> CombinedKey {
         k256::ecdsa::SigningKey::random(&mut self.rng).into()
+    }
+
+    pub fn add_sync_peers(&mut self, config: PeersConfig, remote_info: SyncInfo) {
+        match config {
+            PeersConfig::SupernodeAndRandom => {
+                for _ in 0..100 {
+                    self.add_sync_peer(false, remote_info.clone());
+                }
+                self.add_sync_peer(true, remote_info);
+            }
+            PeersConfig::SupernodeOnly => {
+                self.add_sync_peer(true, remote_info);
+            }
+        }
     }
 
     pub fn new_connected_peers_for_peerdas(&mut self) {
@@ -840,6 +889,19 @@ impl TestRig {
         }
     }
 
+    // Find, not pop
+    pub fn filter_received_network_events<T, F: Fn(&NetworkMessage<E>) -> Option<T>>(
+        &mut self,
+        predicate_transform: F,
+    ) -> Vec<T> {
+        self.drain_network_rx();
+
+        self.network_rx_queue
+            .iter()
+            .filter_map(predicate_transform)
+            .collect()
+    }
+
     pub fn pop_received_processor_event<T, F: Fn(&WorkEvent<E>) -> Option<T>>(
         &mut self,
         predicate_transform: F,
@@ -1088,6 +1150,21 @@ impl TestRig {
         }
     }
 
+    pub fn expect_no_penalty_for_anyone(&mut self) {
+        self.drain_network_rx();
+        let downscore_events = self
+            .network_rx_queue
+            .iter()
+            .filter_map(|ev| match ev {
+                NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((peer_id, msg)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !downscore_events.is_empty() {
+            panic!("Expected no downscoring events but found: {downscore_events:?}");
+        }
+    }
+
     #[track_caller]
     fn expect_parent_chain_process(&mut self) {
         match self.beacon_processor_rx.try_recv() {
@@ -1121,6 +1198,25 @@ impl TestRig {
             Ok(event) => panic!("expected empty beacon processor: {:?}", event),
             other => panic!("unexpected err {:?}", other),
         }
+    }
+
+    #[track_caller]
+    pub fn expect_penalties(&mut self, expected_penalty_msg: &'static str) {
+        let all_penalties = self.filter_received_network_events(|ev| match ev {
+            NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((*peer_id, *msg)),
+            _ => None,
+        });
+        if all_penalties
+            .iter()
+            .any(|(_, msg)| *msg != expected_penalty_msg)
+        {
+            panic!(
+                "Expected penalties only of {expected_penalty_msg}, but found {all_penalties:?}"
+            );
+        }
+        self.log(&format!(
+            "Found expected penalties {expected_penalty_msg}: {all_penalties:?}"
+        ));
     }
 
     #[track_caller]

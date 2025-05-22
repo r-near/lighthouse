@@ -1,4 +1,5 @@
 use beacon_chain::block_verification_types::RpcBlock;
+use itertools::Itertools;
 use lighthouse_network::rpc::methods::BlocksByRangeRequest;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::PeerId;
@@ -17,15 +18,7 @@ const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 5;
 /// after `MAX_BATCH_PROCESSING_ATTEMPTS` times, it is considered faulty.
 const MAX_BATCH_PROCESSING_ATTEMPTS: u8 = 3;
 
-/// Type of expected batch.
-#[derive(Debug, Copy, Clone, Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum ByRangeRequestType {
-    BlocksAndColumns,
-    BlocksAndBlobs,
-    Blocks,
-}
-
+// TODO(das): Consider merging with PeerGroup
 #[derive(Clone, Debug)]
 pub struct BatchPeers {
     block_peer: PeerId,
@@ -52,6 +45,12 @@ impl BatchPeers {
 
     pub fn column(&self, index: &ColumnIndex) -> Option<&PeerId> {
         self.column_peers.get(index)
+    }
+
+    pub fn iter_unique_peers(&self) -> impl Iterator<Item = &PeerId> {
+        std::iter::once(&self.block_peer)
+            .chain(self.column_peers.values())
+            .unique()
     }
 }
 

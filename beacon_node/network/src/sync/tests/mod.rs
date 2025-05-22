@@ -6,13 +6,17 @@ use beacon_chain::builder::Witness;
 use beacon_chain::eth1_chain::CachingEth1Backend;
 use beacon_chain::test_utils::{BeaconChainHarness, EphemeralHarnessType};
 use beacon_processor::WorkEvent;
+use lighthouse_network::service::api_types::ComponentsByRangeRequestId;
 use lighthouse_network::NetworkGlobals;
 use rand_chacha::ChaCha20Rng;
 use slot_clock::ManualSlotClock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use store::MemoryStore;
 use tokio::sync::mpsc;
-use types::{ChainSpec, ForkName, MinimalEthSpec as E};
+use types::{ChainSpec, ForkName, MinimalEthSpec as E, SignedBeaconBlock};
+
+pub use lookups::PeersConfig;
 
 mod lookups;
 mod range;
@@ -64,4 +68,7 @@ struct TestRig {
     rng: ChaCha20Rng,
     fork_name: ForkName,
     spec: Arc<ChainSpec>,
+
+    // Cache of sent blocks for PeerDAS responses
+    sent_blocks_by_range: HashMap<ComponentsByRangeRequestId, Vec<Arc<SignedBeaconBlock<E>>>>,
 }

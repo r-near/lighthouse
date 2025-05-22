@@ -39,6 +39,8 @@
 //!  Each chain is downloaded in batches of blocks. The batched blocks are processed sequentially
 //!  and further batches are requested as current blocks are being processed.
 
+#[cfg(test)]
+use super::chain::BatchStateSummary;
 use super::chain::{BatchId, ChainId, RemoveChain, SyncingChain};
 use super::chain_collection::{ChainCollection, SyncChainStatus};
 use super::sync_type::RangeSyncType;
@@ -100,8 +102,21 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn __failed_chains(&mut self) -> Vec<Hash256> {
+    pub(crate) fn failed_chains(&mut self) -> Vec<Hash256> {
         self.failed_chains.keys().copied().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batches_state(&self) -> Vec<(ChainId, BatchId, BatchStateSummary)> {
+        self.chains
+            .iter()
+            .flat_map(|chain| {
+                chain
+                    .batches_state()
+                    .into_iter()
+                    .map(|(batch_id, state)| (chain.id(), batch_id, state))
+            })
+            .collect()
     }
 
     #[instrument(parent = None,
@@ -344,7 +359,6 @@ where
     pub fn inject_error(
         &mut self,
         network: &mut SyncNetworkContext<T>,
-        peer_id: PeerId,
         batch_id: BatchId,
         chain_id: ChainId,
         request_id: Id,
@@ -352,7 +366,7 @@ where
     ) {
         // check that this request is pending
         match self.chains.call_by_id(chain_id, |chain| {
-            chain.inject_error(network, batch_id, &peer_id, request_id, err)
+            chain.inject_error(network, batch_id, request_id, err)
         }) {
             Ok((removed_chain, sync_type)) => {
                 if let Some((removed_chain, remove_reason)) = removed_chain {

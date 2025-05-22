@@ -199,7 +199,7 @@ impl<E: EthSpec> RpcBlock<E> {
         custody_columns: Vec<CustodyDataColumn<E>>,
         expected_custody_indices: Vec<ColumnIndex>,
         spec: &ChainSpec,
-    ) -> Result<Self, AvailabilityCheckError> {
+    ) -> Result<Self, String> {
         let block_root = block_root.unwrap_or_else(|| get_block_root(&block));
 
         let custody_columns_count = expected_custody_indices.len();
@@ -209,11 +209,7 @@ impl<E: EthSpec> RpcBlock<E> {
                 custody_columns,
                 spec.number_of_columns as usize,
             )
-            .map_err(|e| {
-                AvailabilityCheckError::Unexpected(format!(
-                    "custody_columns len exceeds number_of_columns: {e:?}"
-                ))
-            })?,
+            .map_err(|e| format!("custody_columns len exceeds number_of_columns: {e:?}"))?,
             expected_custody_indices,
         };
         Ok(Self {

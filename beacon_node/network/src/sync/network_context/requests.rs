@@ -26,7 +26,7 @@ mod blocks_by_root;
 mod data_columns_by_range;
 mod data_columns_by_root;
 
-#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoStaticStr)]
 pub enum LookupVerifyError {
     NotEnoughResponsesReturned {
         actual: usize,
@@ -177,12 +177,10 @@ impl<K: Eq + Hash, T: ActiveRequestItems> ActiveRequests<K, T> {
         }
     }
 
-    pub fn active_requests_of_peer(&self, peer_id: &PeerId) -> Vec<&K> {
+    pub fn active_requests(&self) -> impl Iterator<Item = (&K, &PeerId)> {
         self.requests
             .iter()
-            .filter(|(_, request)| &request.peer_id == peer_id)
-            .map(|(id, _)| id)
-            .collect()
+            .map(|(id, request)| (id, &request.peer_id))
     }
 
     pub fn iter_request_peers(&self) -> impl Iterator<Item = PeerId> + '_ {

@@ -494,7 +494,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
         let Some(lookup) = self.single_block_lookups.get_mut(&id.lookup_id) else {
             // We don't have the ability to cancel in-flight RPC requests. So this can happen
             // if we started this RPC request, and later saw the block/blobs via gossip.
-            debug!(?id, "Block returned for single block lookup not present");
+            debug!(%id, "Block returned for single block lookup not present");
             return Err(LookupRequestError::UnknownLookup);
         };
 
@@ -507,7 +507,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
             Ok((response, peer_group, seen_timestamp)) => {
                 debug!(
                     ?block_root,
-                    ?id,
+                    %id,
                     ?peer_group,
                     ?response_type,
                     "Received lookup download success"
@@ -540,7 +540,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                 // the peer and the request ID which is linked to this `id` value here.
                 debug!(
                     ?block_root,
-                    ?id,
+                    %id,
                     ?response_type,
                     error = ?e,
                     "Received lookup download failure"

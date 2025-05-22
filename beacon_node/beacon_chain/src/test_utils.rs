@@ -2418,7 +2418,8 @@ where
                     columns,
                     expected_custody_indices,
                     &self.spec,
-                )?
+                )
+                .map_err(BlockError::InternalError)?
             } else {
                 RpcBlock::new_without_blobs(Some(block_root), block, sampling_column_count)
             }
