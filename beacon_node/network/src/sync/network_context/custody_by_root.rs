@@ -249,7 +249,6 @@ impl<T: BeaconChainTypes> ActiveCustodyByRootRequest<T> {
         let active_request_count_by_peer = cx.active_request_count_by_peer();
         let mut columns_to_request_by_peer = HashMap::<PeerId, Vec<ColumnIndex>>::new();
         let lookup_peers = self.lookup_peers.read();
-        let mut indices_without_peers = vec![];
 
         // Need to:
         // - track how many active requests a peer has for load balancing
@@ -304,9 +303,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRootRequest<T> {
                     // - Add a new peer that custodies the missing columns
                     // - Call `continue_requests`
                     //
-                    // Otherwise this request should be dropped and failed after some time.
-                    // TODO(das): implement the above
-                    indices_without_peers.push(column_index);
+                    // Otherwise this request will be dropped and failed after some time.
                 }
             }
         }

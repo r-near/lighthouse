@@ -425,8 +425,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     // - Add a new peer that custodies the missing columns
                     // - Call `continue_requests`
                     //
-                    // Otherwise this request should be dropped and failed after some time.
-                    // TODO(das): implement the above
+                    // Otherwise this request will be dropped and failed after some time.
                 }
             }
         }

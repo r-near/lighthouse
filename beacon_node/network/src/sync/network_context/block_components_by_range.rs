@@ -191,7 +191,6 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                 blocks_by_range_request,
             } => {
                 if let Some((blocks, block_peer)) = blocks_by_range_request.to_finished() {
-                    // TODO(das): use the peer group
                     let peer_group = BatchPeers::new_from_block_peer(*block_peer);
                     let rpc_blocks = couple_blocks_base(
                         blocks.to_vec(),
@@ -226,7 +225,6 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
                     blocks_by_range_request,
                 } => {
                     if let Some((blocks, block_peer)) = blocks_by_range_request.to_finished() {
-                        // TODO(das): use the peer group
                         let blocks_with_data = blocks
                             .iter()
                             .filter(|block| block.has_data())
