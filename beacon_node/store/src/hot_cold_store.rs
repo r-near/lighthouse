@@ -2900,12 +2900,28 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         Ok(ops)
     }
 
-    /// Returns a single block root from the cold DB
+    /// Return a single block root from the cold DB.
+    ///
+    /// If the slot is unavailable due to partial block history, `Ok(None)` will be returned.
     pub fn get_cold_block_root(&self, slot: Slot) -> Result<Option<Hash256>, Error> {
         Ok(self
             .cold_db
             .get_bytes(DBColumn::BeaconBlockRoots, &slot.as_u64().to_be_bytes())?
-            .map(|bytes| Hash256::from_ssz_bytes(&bytes).unwrap()))
+            .map(|bytes| Hash256::from_ssz_bytes(&bytes))
+            .transpose()?)
+    }
+
+    /// Return a single state root from the cold DB.
+    ///
+    /// If the slot is unavailable due to partial state history, `Ok(None)` will be returned.
+    ///
+    /// This function will usually only work on an archive node.
+    pub fn get_cold_state_root(&self, slot: Slot) -> Result<Option<Hash256>, Error> {
+        Ok(self
+            .cold_db
+            .get_bytes(DBColumn::BeaconStateRoots, &slot.as_u64().to_be_bytes())?
+            .map(|bytes| Hash256::from_ssz_bytes(&bytes))
+            .transpose()?)
     }
 
     /// Try to prune all execution payloads, returning early if there is no need to prune.
@@ -3448,6 +3464,11 @@ pub enum StateSummaryIteratorError {
     },
     BelowTarget(Slot),
     LoadSummaryError(Box<Error>),
+    LoadStateRootError(Box<Error>),
+    MissingStateRoot {
+        target_slot: Slot,
+        state_upper_limit: Slot,
+    },
     OutOfBoundsInitialSlot,
 }
 
@@ -3463,9 +3484,34 @@ fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>
         return Ok(*target_state_root);
     }
 
+    // Fetch the anchor info prior to obtaining the split lock. We don't need to hold a lock because
+    // the `state_upper_limit` can't increase (and rug us) unless state pruning runs, and it never
+    // runs concurrently.
+    let state_upper_limit = store.get_anchor_info().state_upper_limit;
+
     // Hold the split lock so that state summaries are not pruned concurrently with this function
     // running.
     let split = store.split.read_recursive();
+
+    // If the state root is in range of the freezer DB's linear state root storage, fetch it
+    // directly from there. This is useful on archive nodes to avoid some of the complexity of
+    // traversing the sparse portion of the hdiff grid (prior to the split slot). It is also
+    // necessary for the v24 schema migration on archive nodes, where there isn't yet any grid
+    // to traverse.
+    //
+    // FIXME(tree-states): still need to add logic below to somehow traverse the grid on non-archive
+    // nodes.
+    if target_slot < split.slot && target_slot >= state_upper_limit {
+        drop(split);
+        return store
+            .get_cold_state_root(target_slot)
+            .map_err(Box::new)
+            .map_err(StateSummaryIteratorError::LoadStateRootError)?
+            .ok_or_else(|| StateSummaryIteratorError::MissingStateRoot {
+                target_slot,
+                state_upper_limit,
+            });
+    }
 
     let mut state_root = {
         // We can not start loading summaries from `state_root` since its summary has not yet been
