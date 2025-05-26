@@ -1,3 +1,4 @@
+use crate::context_deserialize;
 use crate::{
     test_utils::TestRandom, ChainSpec, Domain, Epoch, ForkName, Hash256, SecretKey, SignedRoot,
     SignedVoluntaryExit,
@@ -24,6 +25,7 @@ use tree_hash_derive::TreeHash;
     TreeHash,
     TestRandom,
 )]
+#[context_deserialize(ForkName)]
 pub struct VoluntaryExit {
     /// Earliest epoch when voluntary exit can be processed.
     pub epoch: Epoch,
@@ -57,7 +59,6 @@ impl VoluntaryExit {
         } else {
             spec.fork_version_for_name(fork_name)
         };
-
         spec.compute_domain(Domain::VoluntaryExit, fork_version, genesis_validators_root)
     }
 }
