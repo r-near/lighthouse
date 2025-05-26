@@ -210,6 +210,12 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
             // Copy each of the freezer layers to the hot DB in slot ascending order.
             for layer_slot in closest_layer_points.into_iter().rev() {
+                // Do not try to load the split state itself from the freezer, it won't be there.
+                // It will be migrated in the main loop below.
+                if layer_slot == split.slot {
+                    continue;
+                }
+
                 let mut freezer_state = db.load_cold_state_by_slot(layer_slot)?;
 
                 let state_root = freezer_state.canonical_root()?;
