@@ -1,8 +1,8 @@
 //! Provides network functionality for the Syncing thread. This fundamentally wraps a network
 //! channel and stores a global RPC ID to perform requests.
 
-use self::custody_by_range::{ActiveCustodyByRangeRequest, CustodyByRangeRequestResult};
-use self::custody_by_root::{ActiveCustodyByRootRequest, CustodyByRootRequestResult};
+use self::custody_by_range::ActiveCustodyByRangeRequest;
+use self::custody_by_root::ActiveCustodyByRootRequest;
 pub use self::requests::{BlocksByRootSingleRequest, DataColumnsByRootSingleBlockRequest};
 use super::manager::BlockProcessType;
 use super::range_sync::BatchPeers;
@@ -75,12 +75,12 @@ impl<T> RpcEvent<T> {
 
 pub type RpcResponseResult<T> = Result<(T, Duration), RpcResponseError>;
 
+/// Duration = latest seen timestamp of all received data columns
 pub type RpcResponseBatchResult<T> = Result<(T, PeerGroup, Duration), RpcResponseError>;
 
-/// Duration = latest seen timestamp of all received data columns
-pub type CustodyByRootResult<T> = RpcResponseBatchResult<DataColumnSidecarList<T>>;
-
-pub type CustodyByRangeResult<T> = RpcResponseBatchResult<DataColumnSidecarList<T>>;
+/// Common result type for `custody_by_root` and `custody_by_range` requests. The peers are part of
+/// the `Ok` response since they are not known until the entire request succeeds.
+pub type CustodyRequestResult<E> = RpcResponseBatchResult<DataColumnSidecarList<E>>;
 
 #[derive(Debug, Clone)]
 pub enum RpcResponseError {
@@ -1102,7 +1102,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     /// attempt.
     pub fn continue_custody_by_root_requests(
         &mut self,
-    ) -> Vec<(CustodyRequester, CustodyByRootResult<T::EthSpec>)> {
+    ) -> Vec<(CustodyRequester, CustodyRequestResult<T::EthSpec>)> {
         let ids = self
             .custody_by_root_requests
             .keys()
@@ -1116,7 +1116,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
                     .custody_by_root_requests
                     .remove(&id)
                     .expect("key of hashmap");
-                let result = request.continue_requests(self);
+                let result = request
+                    .continue_requests(self)
+                    .map_err(Into::<RpcResponseError>::into)
+                    .transpose();
                 self.handle_custody_by_root_result(id, request, result)
                     .map(|result| (id, result))
             })
@@ -1128,7 +1131,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     /// attempt.
     pub fn continue_custody_by_range_requests(
         &mut self,
-    ) -> Vec<(CustodyByRangeRequestId, CustodyByRangeResult<T::EthSpec>)> {
+    ) -> Vec<(CustodyByRangeRequestId, CustodyRequestResult<T::EthSpec>)> {
         let ids = self
             .custody_by_range_requests
             .keys()
@@ -1142,7 +1145,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
                     .custody_by_range_requests
                     .remove(&id)
                     .expect("key of hashmap");
-                let result = request.continue_requests(self);
+                let result = request
+                    .continue_requests(self)
+                    .map_err(Into::<RpcResponseError>::into)
+                    .transpose();
                 self.handle_custody_by_range_result(id, request, result)
                     .map(|result| (id, result))
             })
@@ -1313,7 +1319,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         req_id: DataColumnsByRootRequestId,
         peer_id: PeerId,
         resp: RpcResponseResult<Vec<Arc<DataColumnSidecar<T::EthSpec>>>>,
-    ) -> Option<CustodyByRootResult<T::EthSpec>> {
+    ) -> Option<CustodyRequestResult<T::EthSpec>> {
         let span = span!(
             Level::INFO,
             "SyncNetworkContext",
@@ -1331,7 +1337,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             return None;
         };
 
-        let result = request.on_data_column_downloaded(peer_id, req_id, resp, self);
+        let result = request
+            .on_data_column_downloaded(peer_id, req_id, resp, self)
+            .map_err(Into::<RpcResponseError>::into)
+            .transpose();
 
         self.handle_custody_by_root_result(id.requester, request, result)
     }
@@ -1340,8 +1349,8 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         id: CustodyRequester,
         request: ActiveCustodyByRootRequest<T>,
-        result: CustodyByRootRequestResult<T::EthSpec>,
-    ) -> Option<CustodyByRootResult<T::EthSpec>> {
+        result: Option<CustodyRequestResult<T::EthSpec>>,
+    ) -> Option<CustodyRequestResult<T::EthSpec>> {
         let span = span!(
             Level::INFO,
             "SyncNetworkContext",
@@ -1350,19 +1359,17 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         let _enter = span.enter();
 
         match &result {
-            Ok(Some((columns, peer_group, _))) => {
+            Some(Ok((columns, peer_group, _))) => {
                 debug!(%id, count = columns.len(), peers = ?peer_group, "Custody by root request success, removing")
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 debug!(%id, error = ?e, "Custody by root request failure, removing")
             }
-            Ok(None) => {
+            None => {
                 self.custody_by_root_requests.insert(id, request);
             }
         }
-        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
-        // an Option first to use in an `if let Some() { act on result }` block.
-        result.map_err(Into::<RpcResponseError>::into).transpose()
+        result
     }
 
     /// Insert a downloaded column into an active custody request. Then make progress on the
@@ -1379,7 +1386,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         req_id: DataColumnsByRangeRequestId,
         peer_id: PeerId,
         resp: RpcResponseResult<Vec<Arc<DataColumnSidecar<T::EthSpec>>>>,
-    ) -> Option<CustodyByRootResult<T::EthSpec>> {
+    ) -> Option<CustodyRequestResult<T::EthSpec>> {
         // Note: need to remove the request to borrow self again below. Otherwise we can't
         // do nested requests
         let Some(mut request) = self.custody_by_range_requests.remove(&id) else {
@@ -1390,7 +1397,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             return None;
         };
 
-        let result = request.on_data_column_downloaded(peer_id, req_id, resp, self);
+        let result = request
+            .on_data_column_downloaded(peer_id, req_id, resp, self)
+            .map_err(Into::<RpcResponseError>::into)
+            .transpose();
 
         self.handle_custody_by_range_result(id, request, result)
     }
@@ -1399,25 +1409,23 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         id: CustodyByRangeRequestId,
         request: ActiveCustodyByRangeRequest<T>,
-        result: CustodyByRangeRequestResult<T::EthSpec>,
-    ) -> Option<CustodyByRangeResult<T::EthSpec>> {
+        result: Option<CustodyRequestResult<T::EthSpec>>,
+    ) -> Option<CustodyRequestResult<T::EthSpec>> {
         match &result {
-            Ok(Some((columns, _peer_group, _))) => {
+            Some(Ok((columns, _peer_group, _))) => {
                 // Don't log the peer_group here, it's very long (could be up to 128 peers). If you
                 // want to trace which peer sent the column at index X, search for the log:
                 // `Sync RPC request sent method="DataColumnsByRange" ...`
                 debug!(%id, count = columns.len(), "Custody by range request success, removing")
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 debug!(%id, error = ?e, "Custody by range request failure, removing")
             }
-            Ok(None) => {
+            None => {
                 self.custody_by_range_requests.insert(id, request);
             }
         }
-        // Convert a result from internal format of `ActiveCustodyRequest` (error first to use ?) to
-        // an Option first to use in an `if let Some() { act on result }` block.
-        result.map_err(Into::<RpcResponseError>::into).transpose()
+        result
     }
 
     /// Processes the result of an `*_by_range` RPC request issued by a

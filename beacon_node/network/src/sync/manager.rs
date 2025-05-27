@@ -36,8 +36,7 @@
 use super::backfill_sync::{BackFillSync, ProcessResult, SyncStart};
 use super::block_lookups::BlockLookups;
 use super::network_context::{
-    CustodyByRangeResult, CustodyByRootResult, RangeBlockComponent, RangeRequestId, RpcEvent,
-    SyncNetworkContext,
+    CustodyRequestResult, RangeBlockComponent, RangeRequestId, RpcEvent, SyncNetworkContext,
 };
 use super::peer_sampling::{Sampling, SamplingConfig, SamplingResult};
 use super::peer_sync_info::{remote_sync_type, PeerSyncType};
@@ -1236,7 +1235,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     fn on_custody_by_range_result(
         &mut self,
         id: CustodyByRangeRequestId,
-        result: CustodyByRangeResult<T::EthSpec>,
+        result: CustodyRequestResult<T::EthSpec>,
     ) {
         // TODO(das): Improve the type of RangeBlockComponent::CustodyColumns, not
         // not have to pass a PeerGroup in case of error
@@ -1259,7 +1258,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
     fn on_custody_by_root_result(
         &mut self,
         requester: CustodyRequester,
-        response: CustodyByRootResult<T::EthSpec>,
+        response: CustodyRequestResult<T::EthSpec>,
     ) {
         self.block_lookups
             .on_download_response::<CustodyRequestState<T::EthSpec>>(
