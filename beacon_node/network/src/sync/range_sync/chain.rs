@@ -129,37 +129,13 @@ pub enum ChainSyncingState {
     Syncing,
 }
 
-#[cfg(test)]
-#[derive(Debug, Eq, PartialEq)]
-pub enum BatchStateSummary {
-    Downloading,
-    Processing,
-    AwaitingProcessing,
-    AwaitingValidation,
-    Unexpected(&'static str),
-}
-
 impl<T: BeaconChainTypes> SyncingChain<T> {
-    /// Returns a summary of batch states for assertions in tests.
+    /// Leaks the state of all active batches for assertions in tests.
     #[cfg(test)]
-    pub fn batches_state(&self) -> Vec<(BatchId, BatchStateSummary)> {
+    pub fn batches_state(&self) -> Vec<(BatchId, &BatchState<T::EthSpec>)> {
         self.batches
             .iter()
-            .map(|(id, batch)| {
-                let state = match batch.state() {
-                    // A batch is never left in this state, it's only the initial value
-                    BatchState::AwaitingDownload => {
-                        BatchStateSummary::Unexpected("AwaitingDownload")
-                    }
-                    BatchState::Downloading { .. } => BatchStateSummary::Downloading,
-                    BatchState::AwaitingProcessing { .. } => BatchStateSummary::AwaitingProcessing,
-                    BatchState::Poisoned => BatchStateSummary::Unexpected("Poisoned"),
-                    BatchState::Processing { .. } => BatchStateSummary::Processing,
-                    BatchState::Failed => BatchStateSummary::Unexpected("Failed"),
-                    BatchState::AwaitingValidation { .. } => BatchStateSummary::AwaitingValidation,
-                };
-                (*id, state)
-            })
+            .map(|(id, batch)| (*id, batch.state()))
             .collect()
     }
 

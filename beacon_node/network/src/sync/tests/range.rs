@@ -3,7 +3,7 @@ use crate::network_beacon_processor::ChainSegmentProcessId;
 use crate::status::ToStatusMessage;
 use crate::sync::manager::SLOT_IMPORT_TOLERANCE;
 use crate::sync::network_context::{BlockComponentsByRangeRequestStep, RangeRequestId};
-use crate::sync::range_sync::{BatchId, BatchStateSummary, RangeSyncType};
+use crate::sync::range_sync::{BatchId, BatchState, RangeSyncType};
 use crate::sync::{ChainId, SyncMessage};
 use beacon_chain::data_column_verification::CustodyDataColumn;
 use beacon_chain::test_utils::{test_spec, AttestationStrategy, BlockStrategy};
@@ -298,7 +298,7 @@ impl TestRig {
         self.sync_manager.network().network_globals().sync_state()
     }
 
-    fn get_batch_states(&mut self) -> Vec<(ChainId, BatchId, BatchStateSummary)> {
+    fn get_batch_states(&mut self) -> Vec<(ChainId, BatchId, &BatchState<E>)> {
         self.sync_manager.range_sync().batches_state()
     }
 
@@ -382,27 +382,39 @@ impl TestRig {
         }
     }
 
-    fn expect_all_batches_in_state(&mut self, states: &[BatchStateSummary]) {
+    fn expect_all_batches_in_state<F: Fn(&BatchState<E>) -> bool>(
+        &mut self,
+        predicate: F,
+        expected_state: &'static str,
+    ) {
         let batches = self.get_batch_states();
         if batches.is_empty() {
             panic!("no batches");
         }
-        for batch in &batches {
-            if !states.contains(&batch.2) {
-                panic!("batch {batch:?} not in state {states:?}. Batches: {batches:?}");
+        for (chain_id, batch_id, state) in &batches {
+            if !predicate(state) {
+                panic!("batch {chain_id} {batch_id} not in state {expected_state}, {state}");
             }
         }
     }
 
     fn expect_all_batches_downloading(&mut self) {
-        self.expect_all_batches_in_state(&[BatchStateSummary::Downloading]);
+        self.expect_all_batches_in_state(
+            |state| matches!(state, BatchState::Downloading { .. }),
+            "Downloading",
+        );
     }
 
     fn expect_all_batches_processing_or_awaiting(&mut self) {
-        self.expect_all_batches_in_state(&[
-            BatchStateSummary::Processing,
-            BatchStateSummary::AwaitingProcessing,
-        ]);
+        self.expect_all_batches_in_state(
+            |state| {
+                matches!(
+                    state,
+                    BatchState::Processing { .. } | BatchState::AwaitingProcessing { .. }
+                )
+            },
+            "Processing or AwaitingProcessing",
+        );
     }
 
     fn update_execution_engine_state(&mut self, state: EngineState) {

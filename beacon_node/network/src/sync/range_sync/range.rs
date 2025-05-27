@@ -39,8 +39,6 @@
 //!  Each chain is downloaded in batches of blocks. The batched blocks are processed sequentially
 //!  and further batches are requested as current blocks are being processed.
 
-#[cfg(test)]
-use super::chain::BatchStateSummary;
 use super::chain::{BatchId, ChainId, RemoveChain, SyncingChain};
 use super::chain_collection::{ChainCollection, SyncChainStatus};
 use super::sync_type::RangeSyncType;
@@ -48,6 +46,8 @@ use super::BatchPeers;
 use crate::metrics;
 use crate::status::ToStatusMessage;
 use crate::sync::network_context::{RpcResponseError, SyncNetworkContext};
+#[cfg(test)]
+use crate::sync::range_sync::BatchState;
 use crate::sync::BatchProcessResult;
 use beacon_chain::block_verification_types::RpcBlock;
 use beacon_chain::{BeaconChain, BeaconChainTypes};
@@ -107,7 +107,7 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn batches_state(&self) -> Vec<(ChainId, BatchId, BatchStateSummary)> {
+    pub(crate) fn batches_state(&self) -> Vec<(ChainId, BatchId, &BatchState<T::EthSpec>)> {
         self.chains
             .iter()
             .flat_map(|chain| {
