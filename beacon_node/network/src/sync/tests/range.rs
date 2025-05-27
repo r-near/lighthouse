@@ -304,9 +304,16 @@ impl TestRig {
         self.sync_manager.range_sync().batches_state()
     }
 
-    fn assert_sync_state(&mut self) {
+    fn assert_sync_state(&mut self, expected_state: SyncState) {
         let current_state = self.sync_manager.network().network_globals().sync_state();
-        panic!("{:?}", current_state);
+        assert_eq!(current_state, expected_state);
+    }
+
+    fn assert_syncing_finalized(&mut self) {
+        self.assert_sync_state(SyncState::SyncingFinalized {
+            start_slot: Slot::new(0),
+            target_slot: Slot::new(0),
+        });
     }
 
     fn assert_no_chains_exist(&mut self) {
@@ -330,14 +337,6 @@ impl TestRig {
                 (ev.work_type() == beacon_processor::WorkType::ChainSegment).then_some(())
             })
             .unwrap_or_else(|e| panic!("Expect ChainSegment work event count {i}: {e:?}"));
-        }
-    }
-
-    fn expect_blocks_by_range_requests(&mut self, request_filter: RequestFilter) {
-        let events =
-            self.filter_received_network_events(|ev| request_filter.blocks_by_range_requests(ev));
-        if events.is_empty() {
-            panic!("Expected to find blocks_by_range requests {request_filter:?}")
         }
     }
 
@@ -1080,7 +1079,7 @@ fn finalized_sync_not_enough_custody_peers_on_start(config: Config) {
     // Unikely that the single peer we added has enough columns for us. Tests are determinstic and
     // this error should never be hit
     r.add_connected_sync_peer_not_supernode(remote_info.clone());
-    r.assert_state(RangeSyncType::Finalized);
+    r.assert_syncing_finalized();
 
     // The SyncingChain has a single peer, so it can issue blocks_by_range requests. However, it
     // doesn't have enough peers to cover all columns
