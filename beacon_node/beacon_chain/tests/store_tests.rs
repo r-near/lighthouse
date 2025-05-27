@@ -24,11 +24,13 @@ use state_processing::{state_advance::complete_state_advance, BlockReplayer};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use store::database::interface::BeaconNodeBackend;
 use store::metadata::{SchemaVersion, CURRENT_SCHEMA_VERSION, STATE_UPPER_LIMIT_NO_RETAIN};
 use store::{
+    hdiff::HierarchyConfig,
     iter::{BlockRootsIterator, StateRootsIterator},
     BlobInfo, DBColumn, HotColdDB, StoreConfig,
 };
@@ -3508,6 +3510,101 @@ async fn prune_historic_states() {
 
     check_finalization(&harness, num_blocks_produced + additional_blocks_produced);
     check_split_slot(&harness, store);
+}
+
+// Test the function `get_ancestor_state_root` for slots prior to the split where we only have
+// sparse summaries stored.
+#[tokio::test]
+async fn ancestor_state_root_prior_to_split() {
+    let db_path = tempdir().unwrap();
+
+    let spec = test_spec::<E>();
+
+    let store_config = StoreConfig {
+        prune_payloads: false,
+        hierarchy_config: HierarchyConfig::from_str("5,7,8").unwrap(),
+        ..StoreConfig::default()
+    };
+    let chain_config = ChainConfig {
+        reconstruct_historic_states: false,
+        ..ChainConfig::default()
+    };
+    let import_all_data_columns = false;
+
+    let store = get_store_generic(&db_path, store_config, spec);
+    let harness = get_harness_generic(
+        store.clone(),
+        LOW_VALIDATOR_COUNT,
+        chain_config,
+        import_all_data_columns,
+    );
+
+    // Produce blocks until we have passed through two full snapshot periods. This period length is
+    // determined by the hierarchy config set above.
+    let num_blocks = 2 * store
+        .hierarchy
+        .next_snapshot_slot(Slot::new(1))
+        .unwrap()
+        .as_u64();
+
+    for num_blocks_so_far in 0..num_blocks {
+        harness
+            .extend_chain(
+                1,
+                BlockStrategy::OnCanonicalHead,
+                AttestationStrategy::AllValidators,
+            )
+            .await;
+        harness.advance_slot();
+
+        // Check that `get_ancestor_state_root` can look up the grid-aligned ancestors of every hot
+        // state, even at ancestor slots prior to the split.
+        let head_state = harness.get_current_state();
+        assert_eq!(head_state.slot().as_u64(), num_blocks_so_far + 1);
+
+        let split_slot = store.get_split_slot();
+        let anchor_slot = store.get_anchor_info().anchor_slot;
+
+        for state_slot in (split_slot.as_u64()..=num_blocks_so_far).map(Slot::new) {
+            for ancestor_slot in store
+                .hierarchy
+                .closest_layer_points(state_slot, anchor_slot)
+            {
+                // The function currently doesn't consider a state an ancestor of itself, so this
+                // does not work.
+                if ancestor_slot == state_slot {
+                    continue;
+                }
+                tracing::debug!(
+                    %state_slot,
+                    %ancestor_slot,
+                    head_slot = %head_state.slot(),
+                    "Fetching ancestor state root"
+                );
+                let ancestor_state_root = store::hot_cold_store::get_ancestor_state_root(
+                    &store,
+                    &head_state,
+                    ancestor_slot,
+                )
+                .unwrap();
+
+                // Check state root correctness.
+                assert_eq!(
+                    store
+                        .load_hot_state_summary(&ancestor_state_root)
+                        .unwrap()
+                        .expect(&format!(
+                            "no summary found for {ancestor_state_root:?} (slot {ancestor_slot})"
+                        ))
+                        .slot,
+                    ancestor_slot,
+                )
+            }
+        }
+    }
+
+    // This test only makes sense if the split is non-zero by the end.
+    assert_ne!(store.get_split_slot(), 0);
 }
 
 /// Checks that two chains are the same, for the purpose of these tests.

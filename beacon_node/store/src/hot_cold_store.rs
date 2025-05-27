@@ -3474,7 +3474,7 @@ pub enum StateSummaryIteratorError {
 
 /// Return the ancestor state root of a state beyond SlotsPerHistoricalRoot using the roots iterator
 /// and the store
-fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
+pub fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>>(
     store: &'a HotColdDB<E, Hot, Cold>,
     from_state: &'a BeaconState<E>,
     target_slot: Slot,
