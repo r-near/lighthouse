@@ -1237,21 +1237,9 @@ impl<T: BeaconChainTypes> SyncManager<T> {
         id: CustodyByRangeRequestId,
         result: CustodyRequestResult<T::EthSpec>,
     ) {
-        // TODO(das): Improve the type of RangeBlockComponent::CustodyColumns, not
-        // not have to pass a PeerGroup in case of error
-        let peers = match &result {
-            Ok((_, peers, _)) => peers.clone(),
-            // TODO(das): this PeerGroup with no peers incorrect
-            Err(_) => PeerGroup::from_set(<_>::default()),
-        };
-
         self.on_block_components_by_range_response(
             id.parent_request_id,
-            RangeBlockComponent::CustodyColumns(
-                id,
-                result.map(|(data, _peers, timestamp)| (data, timestamp)),
-                peers,
-            ),
+            RangeBlockComponent::CustodyColumns(id, result),
         );
     }
 

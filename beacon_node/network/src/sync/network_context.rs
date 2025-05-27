@@ -240,11 +240,7 @@ pub enum RangeBlockComponent<E: EthSpec> {
         RpcResponseResult<Vec<Arc<BlobSidecar<E>>>>,
         PeerId,
     ),
-    CustodyColumns(
-        CustodyByRangeRequestId,
-        RpcResponseResult<Vec<Arc<DataColumnSidecar<E>>>>,
-        PeerGroup,
-    ),
+    CustodyColumns(CustodyByRangeRequestId, CustodyRequestResult<E>),
 }
 
 #[cfg(test)]
@@ -1462,8 +1458,8 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
                     .on_blobs_by_range_result(req_id, blobs, peer_id, self)
                     .map_err(Into::<RpcResponseError>::into)
             }),
-            RangeBlockComponent::CustodyColumns(req_id, resp, peers) => {
-                resp.and_then(|(custody_columns, _)| {
+            RangeBlockComponent::CustodyColumns(req_id, resp) => {
+                resp.and_then(|(custody_columns, peers, _)| {
                     request
                         .on_custody_by_range_result(req_id, custody_columns, peers, self)
                         .map_err(Into::<RpcResponseError>::into)
