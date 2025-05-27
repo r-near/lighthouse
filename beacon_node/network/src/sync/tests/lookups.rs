@@ -121,6 +121,8 @@ impl TestRig {
         // deterministic seed
         let rng = ChaCha20Rng::from_seed([0u8; 32]);
 
+        init_tracing();
+
         TestRig {
             beacon_processor_rx,
             beacon_processor_rx_queue: vec![],
@@ -1154,7 +1156,7 @@ impl TestRig {
 
     pub fn expect_no_penalty_for_anyone(&mut self) {
         let downscore_events = self.filter_received_network_events(|ev| match ev {
-            NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((peer_id, msg)),
+            NetworkMessage::ReportPeer { peer_id, msg, .. } => Some((*peer_id, *msg)),
             _ => None,
         });
         if !downscore_events.is_empty() {

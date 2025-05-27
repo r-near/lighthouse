@@ -1380,9 +1380,11 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         peer_id: PeerId,
         resp: RpcResponseResult<DataColumnSidecarList<T::EthSpec>>,
     ) -> Option<CustodyRequestResult<T::EthSpec>> {
+        let custody_by_range_id = req_id.parent_request_id;
+
         // Note: need to remove the request to borrow self again below. Otherwise we can't
         // do nested requests
-        let Some(mut request) = self.custody_by_range_requests.remove(&id.parent_request_id) else {
+        let Some(mut request) = self.custody_by_range_requests.remove(&custody_by_range_id) else {
             metrics::inc_counter_vec(
                 &metrics::SYNC_UNKNOWN_NETWORK_REQUESTS,
                 &["custody_by_range"],
@@ -1395,7 +1397,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
             .map_err(Into::<RpcResponseError>::into)
             .transpose();
 
-        self.handle_custody_by_range_result(id.parent_request_id, request, result)
+        self.handle_custody_by_range_result(custody_by_range_id, request, result)
     }
 
     fn handle_custody_by_range_result(
