@@ -1,5 +1,4 @@
 use super::custody_by_root::{ColumnRequest, Error};
-use crate::sync::network_context::RpcResponseError;
 use beacon_chain::validator_monitor::timestamp_now;
 use beacon_chain::BeaconChainTypes;
 use fnv::FnvHashMap;
@@ -22,7 +21,7 @@ use types::{
 
 use super::{PeerGroup, RpcResponseResult, SyncNetworkContext};
 
-const TEMPORARY_FAULT_EXPIRY_SECONDS: u64 = 15;
+const FAILED_PEERS_EXPIRY_SECONDS: u64 = 15;
 const REQUEST_EXPIRY_SECONDS: u64 = 300;
 
 pub struct ActiveCustodyByRangeRequest<T: BeaconChainTypes> {
@@ -41,13 +40,7 @@ pub struct ActiveCustodyByRangeRequest<T: BeaconChainTypes> {
         FnvHashMap<DataColumnsByRangeRequestId, ActiveBatchColumnsRequest>,
     /// Peers that have recently failed to successfully respond to a columns by root request.
     /// Having a LRUTimeCache allows this request to not have to track disconnecting peers.
-    peers_with_custody_failures: LRUTimeCache<PeerId>,
-    peers_with_temporary_faults: LRUTimeCache<PeerId>,
-    // TODO(das): does this HashSet has an OOM risk? We should either: make sure that this request
-    // structs are dropped after some time, that disconnected peers are pruned (but we may want to
-    // retain faulty information if they just disconnect and reconnect) or make this an LRUTimeCache
-    // with a long time (like 5 minutes).
-    peers_with_permanent_faults: HashSet<PeerId>,
+    failed_peers: LRUTimeCache<PeerId>,
     /// Set of peers that claim to have imported this block and their custody columns
     lookup_peers: Arc<RwLock<HashSet<PeerId>>>,
 
@@ -89,13 +82,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     .map(|index| (*index, ColumnRequest::new())),
             ),
             active_batch_columns_requests: <_>::default(),
-            peers_with_custody_failures: LRUTimeCache::new(Duration::from_secs(
-                TEMPORARY_FAULT_EXPIRY_SECONDS,
-            )),
-            peers_with_temporary_faults: LRUTimeCache::new(Duration::from_secs(
-                TEMPORARY_FAULT_EXPIRY_SECONDS,
-            )),
-            peers_with_permanent_faults: HashSet::new(),
+            failed_peers: LRUTimeCache::new(Duration::from_secs(FAILED_PEERS_EXPIRY_SECONDS)),
             lookup_peers,
             _phantom: PhantomData,
         }
@@ -138,7 +125,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                 }
 
                 // Accumulate columns that the peer does not have to issue a single log per request
-                let mut missing_column_indexes = vec![];
+                let mut missing_column_indices = vec![];
                 let mut incorrect_column_indices = vec![];
                 let mut imported_column_indices = vec![];
 
@@ -178,14 +165,8 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                                 // - peer custodies this column `index`
                                 // - peer claims to be synced to at least `slot`
                                 //
-                                // Therefore not returning this column is an protocol violation that we
-                                // penalize and mark the peer as failed to retry with another peer.
-                                //
-                                // TODO(das) do not consider this case a success. We know for sure the block has
-                                // data. However we allow the peer to return empty as we can't attribute fault.
-                                // TODO(das): Should track which columns are missing and eventually give up
-                                // TODO(das): If the peer is in the lookup peer set it claims to have imported
-                                // the block AND its custody columns. So in this case we can downscore
+                                // Then we penalize the faulty peer, mark it as failed and try with
+                                // another.
                                 Err(ColumnResponseError::MissingColumn(slot))
                             }
                         })
@@ -219,15 +200,15 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                                     ));
                                 }
                                 ColumnResponseError::MissingColumn(slot) => {
-                                    missing_column_indexes.push((index, slot));
+                                    missing_column_indices.push((index, slot));
                                 }
                             }
                         }
                     }
                 }
 
-                // Log missing_column_indexes and incorrect_column_indices here in batch per request
-                // to make this logs more compact and less noisy.
+                // Log `imported_column_indices`, `missing_column_indexes` and
+                // `incorrect_column_indices` once per request to make the logs less noisy.
                 if !imported_column_indices.is_empty() {
                     // TODO(das): this log may be redundant. We already log on DataColumnsByRange
                     // completed, and on DataColumnsByRange sent we log the column indices
@@ -246,21 +227,18 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                 }
 
                 if !incorrect_column_indices.is_empty() {
-                    // Note: Batch logging that columns are missing to not spam logger
                     debug!(
                         id = %self.id,
                         data_columns_by_range_req_id = %req_id,
                         %peer_id,
-                        // TODO(das): this property can become very noisy, being the full range 0..128
-                        incorrect_columns = ?incorrect_column_indices,
+                        ?incorrect_column_indices,
                         "Custody by range peer returned non-matching columns"
                     );
 
                     // Returning a non-canonical column is not a permanent fault. We should not
                     // retry the peer for some time but the peer may return a canonical column in
                     // the future.
-                    // TODO(das): if this finalized sync the fault is permanent
-                    self.peers_with_temporary_faults.insert(peer_id);
+                    self.failed_peers.insert(peer_id);
                     cx.report_peer(
                         peer_id,
                         PeerAction::MidToleranceError,
@@ -268,19 +246,17 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     );
                 }
 
-                if !missing_column_indexes.is_empty() {
-                    // Note: Batch logging that columns are missing to not spam logger
+                if !missing_column_indices.is_empty() {
                     debug!(
                         id = %self.id,
                         data_columns_by_range_req_id = %req_id,
                         %peer_id,
-                        // TODO(das): this property can become very noisy, being the full range 0..128
-                        ?missing_column_indexes,
+                        ?missing_column_indices,
                         "Custody by range peer claims to not have some data"
                     );
 
                     // Not having columns is not a permanent fault. The peer may be backfilling.
-                    self.peers_with_custody_failures.insert(peer_id);
+                    self.failed_peers.insert(peer_id);
                     cx.report_peer(peer_id, PeerAction::MidToleranceError, "custody_failure");
                 }
             }
@@ -293,7 +269,6 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     "Custody by range download error"
                 );
 
-                // TODO(das): Should mark peer as failed and try from another peer
                 for column_index in &batch_request.indices {
                     self.column_requests
                         .get_mut(column_index)
@@ -301,22 +276,8 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                         .on_download_error_and_mark_failure(req_id, err.clone())?;
                 }
 
-                match err {
-                    // Verify errors are correctness errors against our request or about the
-                    // returned data itself. This peer is faulty or malicious, should not be
-                    // retried.
-                    RpcResponseError::VerifyError(_) => {
-                        self.peers_with_permanent_faults.insert(peer_id);
-                    }
-                    // Network errors are not permanent faults and worth retrying
-                    RpcResponseError::RpcError(_) => {
-                        self.peers_with_temporary_faults.insert(peer_id);
-                    }
-                    // Do nothing for internal errors
-                    RpcResponseError::InternalError(_) => {}
-                    // unreachable
-                    RpcResponseError::RequestExpired(_) => {}
-                }
+                // An RpcResponseError is already downscored in network_context
+                self.failed_peers.insert(peer_id);
             }
         };
 
@@ -386,18 +347,13 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                 let mut priorized_peers = custodial_peers
                     .iter()
                     .filter(|peer| {
-                        // Never request again peers with permanent faults
-                        // Do not request peers with custody failures for some time
-                        !self.peers_with_permanent_faults.contains(peer)
-                            && !self.peers_with_custody_failures.contains(peer)
+                        // Do not request faulty peers for some time
+                        !self.failed_peers.contains(peer)
                     })
                     .map(|peer| {
                         (
                             // Prioritize peers that claim to know have imported this block
                             if lookup_peers.contains(peer) { 0 } else { 1 },
-                            // De-prioritize peers that have failed to successfully respond to
-                            // requests recently, but allow to immediatelly request them again
-                            self.peers_with_temporary_faults.contains(peer),
                             // Prefer peers with fewer requests to load balance across peers.
                             // We batch requests to the same peer, so count existence in the
                             // `columns_to_request_by_peer` as a single 1 request.
@@ -411,7 +367,7 @@ impl<T: BeaconChainTypes> ActiveCustodyByRangeRequest<T> {
                     .collect::<Vec<_>>();
                 priorized_peers.sort_unstable();
 
-                if let Some((_, _, _, _, peer_id)) = priorized_peers.first() {
+                if let Some((_, _, _, peer_id)) = priorized_peers.first() {
                     columns_to_request_by_peer
                         .entry(*peer_id)
                         .or_default()

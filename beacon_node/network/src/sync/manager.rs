@@ -413,6 +413,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 PeerSyncType::Advanced => {
                     self.range_sync
                         .add_peer(&mut self.network, local, peer_id, remote);
+                    self.backfill_sync.add_peer(peer_id);
                 }
                 PeerSyncType::FullySynced => {
                     // Sync considers this peer close enough to the head to not trigger range sync.
@@ -530,6 +531,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
 
         // Remove peer from all data structures
         self.range_sync.peer_disconnect(&mut self.network, peer_id);
+        self.backfill_sync.peer_disconnected(peer_id);
         self.block_lookups.peer_disconnected(peer_id);
 
         // Regardless of the outcome, we update the sync status.

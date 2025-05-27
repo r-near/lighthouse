@@ -478,7 +478,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         request: BlocksByRangeRequest,
         requester: RangeRequestId,
-        peers: &HashSet<PeerId>,
+        peers: Arc<RwLock<HashSet<PeerId>>>,
         peers_to_deprioritize: &HashSet<PeerId>,
         total_requests_per_peer: &HashMap<PeerId, usize>,
     ) -> Result<Id, RpcRequestSendError> {
@@ -498,7 +498,6 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
 
         self.block_components_by_range_requests.insert(id, req);
 
-        // TODO: use ID
         Ok(id.id)
     }
 

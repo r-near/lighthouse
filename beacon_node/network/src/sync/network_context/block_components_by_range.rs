@@ -91,7 +91,7 @@ impl From<Error> for RpcRequestSendError {
     }
 }
 
-/// FOR TESTING ONLY
+/// Used to typesafe assertions of state in range sync tests
 #[cfg(test)]
 #[derive(Debug)]
 pub enum BlockComponentsByRangeRequestStep {
@@ -103,7 +103,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
     pub fn new(
         id: ComponentsByRangeRequestId,
         request: BlocksByRangeRequest,
-        peers: &HashSet<PeerId>,
+        peers: Arc<RwLock<HashSet<PeerId>>>,
         peers_to_deprioritize: &HashSet<PeerId>,
         total_requests_per_peer: &HashMap<PeerId, usize>,
         cx: &mut SyncNetworkContext<T>,
@@ -123,6 +123,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
         // will request all blocks for the first 5 epochs to that same single peer. Before we would
         // query only idle peers in the syncing chain.
         let Some(block_peer) = peers
+            .read()
             .iter()
             .map(|peer| {
                 (
@@ -180,9 +181,7 @@ impl<T: BeaconChainTypes> BlockComponentsByRangeRequest<T> {
 
         Ok(Self {
             id,
-            // TODO(das): share the rwlock with the range sync batch. Are peers added to the batch
-            // after being created?
-            peers: Arc::new(RwLock::new(peers.clone())),
+            peers,
             request,
             state,
         })
@@ -511,8 +510,6 @@ fn couple_blocks_fulu<E: EthSpec>(
                 .remove(&block_root)
                 .unwrap_or_default();
 
-            // TODO(das): Change RpcBlock to holding a Vec of DataColumnSidecars so we don't need
-            // the spec here.
             RpcBlock::new_with_custody_columns(
                 Some(block_root),
                 block,

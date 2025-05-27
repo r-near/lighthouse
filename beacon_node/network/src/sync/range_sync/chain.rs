@@ -10,7 +10,9 @@ use itertools::Itertools;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::{PeerAction, PeerId};
 use logging::crit;
+use parking_lot::RwLock;
 use std::collections::{btree_map::Entry, BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use strum::IntoStaticStr;
 use tracing::{debug, instrument, warn};
 use types::{Epoch, EthSpec, Hash256, Slot};
@@ -91,7 +93,11 @@ pub struct SyncingChain<T: BeaconChainTypes> {
     ///
     /// Also, For each peer tracks the total requests done per peer as part of this SyncingChain
     /// `HashMap<peer, total_requests_per_peer>`
-    peers: HashMap<PeerId, usize>,
+    peers: Arc<RwLock<HashSet<PeerId>>>,
+
+    /// Tracks the total requests done to each peer for this SyncingChain. Forces us to fetch data
+    /// from all peers to prevent eclipse attacks
+    requests_per_peer: HashMap<PeerId, usize>,
 
     /// Starting epoch of the next batch that needs to be downloaded.
     to_be_downloaded: BatchId,
@@ -173,7 +179,8 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             target_head_slot,
             target_head_root,
             batches: BTreeMap::new(),
-            peers: HashMap::from_iter([(peer_id, <_>::default())]),
+            peers: Arc::new(RwLock::new(HashSet::from_iter([peer_id]))),
+            requests_per_peer: HashMap::from_iter([(peer_id, <_>::default())]),
             to_be_downloaded: start_epoch,
             processing_target: start_epoch,
             optimistic_start: None,
@@ -191,7 +198,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     /// Check if the chain has peers from which to process batches.
     #[instrument(parent = None,level = "info", fields(chain = self.id , service = "range_sync"), skip_all)]
     pub fn available_peers(&self) -> usize {
-        self.peers.len()
+        self.peers.read().len()
     }
 
     /// Get the chain's id.
@@ -203,7 +210,12 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     /// Peers currently syncing this chain.
     #[instrument(parent = None,level = "info", fields(chain = self.id , service = "range_sync"), skip_all)]
     pub fn peers(&self) -> impl Iterator<Item = PeerId> + '_ {
-        self.peers.keys().cloned()
+        self.peers
+            .read()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     /// Progress in epochs made by the chain
@@ -227,9 +239,10 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
     /// If the peer has active batches, those are considered failed and re-requested.
     #[instrument(parent = None,level = "info", fields(chain = self.id , service = "range_sync"), skip_all)]
     pub fn remove_peer(&mut self, peer_id: &PeerId) -> ProcessingResult {
-        self.peers.remove(peer_id);
+        self.peers.write().remove(peer_id);
+        self.requests_per_peer.remove(peer_id);
 
-        if self.peers.is_empty() {
+        if self.peers.read().is_empty() {
             Err(RemoveChain::EmptyPeerPool)
         } else {
             Ok(KeepChain)
@@ -259,7 +272,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         // Account for one more requests to this peer
         // TODO(das): this code assumes that we do a single request per peer per RpcBlock
         for peer in batch_peers.iter_unique_peers() {
-            *self.peers.entry(*peer).or_default() += 1;
+            *self.requests_per_peer.entry(*peer).or_default() += 1;
         }
 
         // check if we have this batch
@@ -613,7 +626,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
                             "Batch failed to download. Dropping chain scoring peers"
                         );
 
-                        for (peer, _) in self.peers.drain() {
+                        for peer in self.peers.write().drain() {
                             network.report_peer(peer, penalty, "faulty_chain");
                         }
                         Err(RemoveChain::ChainFailed {
@@ -878,7 +891,8 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         network: &mut SyncNetworkContext<T>,
         peer_id: PeerId,
     ) -> ProcessingResult {
-        self.peers.insert(peer_id, <_>::default());
+        self.peers.write().insert(peer_id);
+        self.requests_per_peer.insert(peer_id, <_>::default());
         self.request_batches(network)
     }
 
@@ -952,26 +966,15 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
             let request = batch.to_blocks_by_range_request();
             let failed_peers = batch.failed_block_peers();
 
-            // TODO(das): we should request only from peers that are part of this SyncingChain.
-            // However, then we hit the NoPeer error frequently which causes the batch to fail and
-            // the SyncingChain to be dropped. We need to handle this case more gracefully.
-            let synced_peers = network
-                .network_globals()
-                .peers
-                .read()
-                .synced_peers()
-                .cloned()
-                .collect::<HashSet<_>>();
-
             match network.block_components_by_range_request(
                 request,
                 RangeRequestId::RangeSync {
                     chain_id: self.id,
                     batch_id,
                 },
-                &synced_peers,
+                self.peers.clone(),
                 &failed_peers,
-                &self.peers,
+                &self.requests_per_peer,
             ) {
                 Ok(request_id) => {
                     // inform the batch about the new request

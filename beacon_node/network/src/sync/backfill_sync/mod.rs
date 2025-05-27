@@ -21,8 +21,9 @@ use beacon_chain::{BeaconChain, BeaconChainTypes};
 use itertools::Itertools;
 use lighthouse_network::service::api_types::Id;
 use lighthouse_network::types::{BackFillState, NetworkGlobals};
-use lighthouse_network::PeerAction;
+use lighthouse_network::{PeerAction, PeerId};
 use logging::crit;
+use parking_lot::RwLock;
 use std::collections::{
     btree_map::{BTreeMap, Entry},
     HashMap, HashSet,
@@ -135,6 +136,8 @@ pub struct BackFillSync<T: BeaconChainTypes> {
     /// This signifies that we are able to attempt to restart a failed chain.
     restart_failed_sync: bool,
 
+    peers: Arc<RwLock<HashSet<PeerId>>>,
+
     /// Reference to the beacon chain to obtain initial starting points for the backfill sync.
     beacon_chain: Arc<BeaconChain<T>>,
 
@@ -179,6 +182,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
             current_processing_batch: None,
             validated_batches: 0,
             restart_failed_sync: false,
+            peers: <_>::default(),
             beacon_chain,
         };
 
@@ -218,14 +222,7 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         match self.state() {
             BackFillState::Syncing => {} // already syncing ignore.
             BackFillState::Paused => {
-                if self
-                    .network_globals
-                    .peers
-                    .read()
-                    .synced_peers()
-                    .next()
-                    .is_some()
-                {
+                if !self.peers.read().is_empty() {
                     // If there are peers to resume with, begin the resume.
                     debug!(start_epoch = ?self.current_start, awaiting_batches = self.batches.len(), processing_target = ?self.processing_target, "Resuming backfill sync");
                     self.set_state(BackFillState::Syncing);
@@ -296,6 +293,14 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         if matches!(self.state(), BackFillState::Failed) {
             self.restart_failed_sync = true;
         }
+    }
+
+    pub fn add_peer(&mut self, peer_id: PeerId) {
+        self.peers.write().insert(peer_id);
+    }
+
+    pub fn peer_disconnected(&mut self, peer_id: &PeerId) {
+        self.peers.write().remove(peer_id);
     }
 
     /// An RPC error has occurred.
@@ -920,20 +925,12 @@ impl<T: BeaconChainTypes> BackFillSync<T> {
         batch_id: BatchId,
     ) -> Result<(), BackFillError> {
         if let Some(batch) = self.batches.get_mut(&batch_id) {
-            let synced_peers = self
-                .network_globals
-                .peers
-                .read()
-                .synced_peers()
-                .cloned()
-                .collect::<HashSet<_>>();
-
             let request = batch.to_blocks_by_range_request();
             let failed_peers = batch.failed_block_peers();
             match network.block_components_by_range_request(
                 request,
                 RangeRequestId::BackfillSync { batch_id },
-                &synced_peers,
+                self.peers.clone(),
                 &failed_peers,
                 // Does not track total requests per peers for now
                 &HashMap::new(),
