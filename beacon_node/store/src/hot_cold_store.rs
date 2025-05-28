@@ -366,6 +366,16 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
             "Blob DB initialized"
         );
 
+        // Ensure that any on-disk config is compatible with the supplied config.
+        //
+        // We do this prior to the migration now, because we don't want the migration using the
+        // in-memory config if it is inconsistent with the on-disk config. In future we may need
+        // to put this in/after the migration if the migration changes the config format.
+        if let Some(disk_config) = db.load_config()? {
+            db.config.check_compatibility(&disk_config)?;
+        }
+        db.store_config()?;
+
         // Ensure that the schema version of the on-disk database matches the software.
         // If the version is mismatched, an automatic migration will be attempted.
         let db = Arc::new(db);
@@ -392,26 +402,6 @@ impl<E: EthSpec> HotColdDB<E, BeaconNodeBackend<E>, BeaconNodeBackend<E>> {
 
             debug!(?split, "Hot-Cold DB split initialized");
         }
-
-        // Ensure that any on-disk config is compatible with the supplied config.
-        if let Some(disk_config) = db.load_config()? {
-            let split = db.get_split_info();
-            let anchor = db.get_anchor_info();
-            db.config
-                .check_compatibility(&disk_config, &split, &anchor)?;
-
-            // Inform user if hierarchy config is changing.
-            if let Ok(hierarchy_config) = disk_config.hierarchy_config() {
-                if &db.config.hierarchy_config != hierarchy_config {
-                    info!(
-                        previous_config = %hierarchy_config,
-                        new_config = %db.config.hierarchy_config,
-                        "Updating historic state config"
-                    );
-                }
-            }
-        }
-        db.store_config()?;
 
         // TODO(tree-states): Here we can choose to prune advanced states to reclaim disk space. As
         // it's a foreground task there's no risk of race condition that can corrupt the DB.
