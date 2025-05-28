@@ -44,9 +44,15 @@ pub struct StateCache<E: EthSpec> {
 
 #[derive(Debug)]
 pub enum PutStateOutcome {
+    /// State is prior to the cache's finalized state (lower slot) and was not inserted.
+    PreFinalizedIgnored,
+    /// State is equal to the cache's finalized state and was not inserted.
     Finalized,
+    /// State was already present in the cache.
     Duplicate,
-    /// Includes deleted states as a result of this insertion
+    /// State is new to the cache and was inserted.
+    ///
+    /// Includes deleted states as a result of this insertion.
     New(Vec<Hash256>),
 }
 
@@ -136,12 +142,12 @@ impl<E: EthSpec> StateCache<E> {
         block_root: Hash256,
         state: &BeaconState<E>,
     ) -> Result<PutStateOutcome, Error> {
-        if self
-            .finalized_state
-            .as_ref()
-            .is_some_and(|finalized_state| finalized_state.state_root == state_root)
-        {
-            return Ok(PutStateOutcome::Finalized);
+        if let Some(ref finalized_state) = self.finalized_state {
+            if finalized_state.state_root == state_root {
+                return Ok(PutStateOutcome::Finalized);
+            } else if state.slot() <= finalized_state.state.slot() {
+                return Ok(PutStateOutcome::PreFinalizedIgnored);
+            }
         }
 
         if self.states.peek(&state_root).is_some() {

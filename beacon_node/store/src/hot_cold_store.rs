@@ -1477,7 +1477,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 // in the cache but not on disk. Instead of relying on the cache we try loading
                 // the state summary below and rely on that instead.
             }
-            PutStateOutcome::Finalized => {} // Continue to store.
+            // Continue to store.
+            PutStateOutcome::Finalized | PutStateOutcome::PreFinalizedIgnored => {}
         }
 
         // Computing diffs is expensive so we avoid it if we already have this state stored on
