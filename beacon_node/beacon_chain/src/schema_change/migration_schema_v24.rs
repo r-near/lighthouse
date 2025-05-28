@@ -177,6 +177,14 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
         // If the node is already an archive node, we can set the anchor slot to 0 and copy
         // snapshots and diffs from the freezer DB to the hot DB in order to establish an initial
         // hot grid that is aligned/"perfect" (no `start_slot`/`anchor_slot` to worry about).
+        //
+        // This only works if all of the following are true:
+        //
+        // - We have the previous snapshot for the split state stored in the freezer DB, i.e.
+        //   if `previous_snapshot_slot >= state_upper_limit`.
+        // - The split state itself will be stored as a diff or snapshot in the new grid. We choose
+        //   not to support a split state that requires block replay, because computing its previous
+        //   state root from the DAG is not straight-forward.
         let dummy_start_slot = Slot::new(0);
         let closest_layer_points = db
             .hierarchy
@@ -191,9 +199,12 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                     "closest_layer_points must not be empty".to_string(),
                 ))?;
 
-        // If we have the previous snapshot stored in the freezer DB, then we can use this
-        // optimisation.
-        if previous_snapshot_slot >= anchor_info.state_upper_limit {
+        if previous_snapshot_slot >= anchor_info.state_upper_limit
+            && db
+                .hierarchy
+                .storage_strategy(split.slot, dummy_start_slot)
+                .is_ok_and(|strategy| !strategy.is_replay_from())
+        {
             info!(
                 %previous_snapshot_slot,
                 split_slot = %split.slot,
@@ -310,11 +321,13 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                     StorageStrategy::DiffFrom(_) | StorageStrategy::Snapshot => {
                         // We choose to not compute states during the epoch with block replay for
                         // simplicity. Therefore we can only support a hot heriarchy config where the
-                        // lowest layer is >= 5.
+                        // lowest layer is >= log2(SLOTS_PER_EPOCH).
+                        // FIXME(tree-states): we need to remove this restriction.
                         if slot % T::EthSpec::slots_per_epoch() != 0 {
-                            return Err(Error::MigrationError(
-                                "Hot hierarchy config lowest value must be >= 5".to_owned(),
-                            ));
+                            return Err(Error::MigrationError(format!(
+                                "Hot hierarchy config lowest value must be >= {}",
+                                T::EthSpec::slots_per_epoch().trailing_zeros()
+                            )));
                         }
 
                         // Load the full state and re-store it as a snapshot or diff.
@@ -344,7 +357,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                         // 2. Convert the summary to the new format.
                         if state_root == split.state_root {
                             return Err(Error::MigrationError(
-                                "unreachable: split state should be stored as a snapshot"
+                                "unreachable: split state should be stored as a snapshot or diff"
                                     .to_string(),
                             ));
                         }

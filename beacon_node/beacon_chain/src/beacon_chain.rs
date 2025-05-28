@@ -6779,12 +6779,20 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub fn chain_dump(
         &self,
     ) -> Result<Vec<BeaconSnapshot<T::EthSpec, BlindedPayload<T::EthSpec>>>, Error> {
+        self.chain_dump_from_slot(Slot::new(0))
+    }
+
+    /// As for `chain_dump` but dumping only the portion of the chain newer than `from_slot`.
+    pub fn chain_dump_from_slot(
+        &self,
+        from_slot: Slot,
+    ) -> Result<Vec<BeaconSnapshot<T::EthSpec, BlindedPayload<T::EthSpec>>>, Error> {
         let mut dump = vec![];
 
         let mut prev_block_root = None;
         let mut prev_beacon_state = None;
 
-        for res in self.forwards_iter_block_roots(Slot::new(0))? {
+        for res in self.forwards_iter_block_roots(from_slot)? {
             let (beacon_block_root, _) = res?;
 
             // Do not include snapshots at skipped slots.

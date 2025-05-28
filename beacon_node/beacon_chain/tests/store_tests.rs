@@ -3056,12 +3056,27 @@ async fn revert_minority_fork_on_resume() {
 // version is correct. This is the easiest schema test to write without historic versions of
 // Lighthouse on-hand, but has the disadvantage that the min version needs to be adjusted manually
 // as old downgrades are deprecated.
-#[tokio::test]
-async fn schema_downgrade_to_min_version() {
+async fn schema_downgrade_to_min_version(
+    store_config: StoreConfig,
+    reconstruct_historic_states: bool,
+) {
     let num_blocks_produced = E::slots_per_epoch() * 4;
     let db_path = tempdir().unwrap();
-    let store = get_store(&db_path);
-    let harness = get_harness(store.clone(), LOW_VALIDATOR_COUNT);
+    let spec = test_spec::<E>();
+
+    let chain_config = ChainConfig {
+        reconstruct_historic_states,
+        ..ChainConfig::default()
+    };
+    let import_all_data_columns = false;
+
+    let store = get_store_generic(&db_path, store_config.clone(), spec.clone());
+    let harness = get_harness_generic(
+        store.clone(),
+        LOW_VALIDATOR_COUNT,
+        chain_config.clone(),
+        import_all_data_columns,
+    );
 
     harness
         .extend_chain(
@@ -3082,7 +3097,7 @@ async fn schema_downgrade_to_min_version() {
     drop(harness);
 
     // Re-open the store.
-    let store = get_store(&db_path);
+    let store = get_store_generic(&db_path, store_config, spec);
 
     // Downgrade.
     migrate_schema::<DiskHarnessType<E>>(
@@ -3105,16 +3120,28 @@ async fn schema_downgrade_to_min_version() {
     // Recreate the harness.
     let harness = BeaconChainHarness::builder(MinimalEthSpec)
         .default_spec()
+        .chain_config(chain_config)
         .keypairs(KEYPAIRS[0..LOW_VALIDATOR_COUNT].to_vec())
         .testing_slot_clock(slot_clock)
         .resumed_disk_store(store.clone())
         .mock_execution_layer()
         .build();
 
+    // Check chain dump for appropriate range depending on whether this is an archive node.
+    let chain_dump_start_slot = if reconstruct_historic_states {
+        Slot::new(0)
+    } else {
+        store.get_split_slot()
+    };
+
     check_finalization(&harness, num_blocks_produced);
     check_split_slot(&harness, store.clone());
-    check_chain_dump(&harness, num_blocks_produced + 1);
-    check_iterators(&harness);
+    check_chain_dump_from_slot(
+        &harness,
+        chain_dump_start_slot,
+        num_blocks_produced + 1 - chain_dump_start_slot.as_u64(),
+    );
+    check_iterators_from_slot(&harness, chain_dump_start_slot);
 
     // Check that downgrading beyond the minimum version fails (bound is *tight*).
     let min_version_sub_1 = SchemaVersion(min_version.as_u64().checked_sub(1).unwrap());
@@ -3125,6 +3152,67 @@ async fn schema_downgrade_to_min_version() {
         min_version_sub_1,
     )
     .expect_err("should not downgrade below minimum version");
+}
+
+// Schema upgrade/downgrade on an archive node where the optimised migration does apply due
+// to the split state being aligned to a diff layer.
+#[tokio::test]
+async fn schema_downgrade_to_min_version_archive_node_grid_aligned() {
+    // Need to use 3 as the hierarchy exponent to get diffs on every epoch boundary with minimal
+    // spec.
+    schema_downgrade_to_min_version(
+        StoreConfig {
+            hierarchy_config: HierarchyConfig::from_str("3,4,5").unwrap(),
+            prune_payloads: false,
+            ..StoreConfig::default()
+        },
+        true,
+    )
+    .await
+}
+
+// Schema upgrade/downgrade on an archive node where the optimised migration DOES NOT apply
+// due to the split state NOT being aligned to a diff layer.
+#[tokio::test]
+async fn schema_downgrade_to_min_version_archive_node_grid_unaligned() {
+    schema_downgrade_to_min_version(
+        StoreConfig {
+            hierarchy_config: HierarchyConfig::from_str("7").unwrap(),
+            prune_payloads: false,
+            ..StoreConfig::default()
+        },
+        true,
+    )
+    .await
+}
+
+// Schema upgrade/downgrade on a full node with a fairly normal per-epoch diff config.
+#[tokio::test]
+async fn schema_downgrade_to_min_version_full_node_per_epoch_diffs() {
+    schema_downgrade_to_min_version(
+        StoreConfig {
+            hierarchy_config: HierarchyConfig::from_str("3,4,5").unwrap(),
+            prune_payloads: false,
+            ..StoreConfig::default()
+        },
+        false,
+    )
+    .await
+}
+
+// Schema upgrade/downgrade on a full node with dense per-slot diffs.
+// FIXME(tree-states): this will panic
+#[tokio::test]
+async fn schema_downgrade_to_min_version_full_node_dense_diffs() {
+    schema_downgrade_to_min_version(
+        StoreConfig {
+            hierarchy_config: HierarchyConfig::from_str("0,3,4,5").unwrap(),
+            prune_payloads: false,
+            ..StoreConfig::default()
+        },
+        true,
+    )
+    .await
 }
 
 /// Check that blob pruning prunes blobs older than the data availability boundary.
@@ -3700,7 +3788,11 @@ fn check_split_slot(
 
 /// Check that all the states in a chain dump have the correct tree hash.
 fn check_chain_dump(harness: &TestHarness, expected_len: u64) {
-    let mut chain_dump = harness.chain.chain_dump().unwrap();
+    check_chain_dump_from_slot(harness, Slot::new(0), expected_len)
+}
+
+fn check_chain_dump_from_slot(harness: &TestHarness, from_slot: Slot, expected_len: u64) {
+    let mut chain_dump = harness.chain.chain_dump_from_slot(from_slot).unwrap();
 
     assert_eq!(chain_dump.len() as u64, expected_len);
 
@@ -3748,7 +3840,7 @@ fn check_chain_dump(harness: &TestHarness, expected_len: u64) {
 
     let mut forward_block_roots = harness
         .chain
-        .forwards_iter_block_roots(Slot::new(0))
+        .forwards_iter_block_roots(from_slot)
         .expect("should get iter")
         .map(Result::unwrap)
         .collect::<Vec<_>>();
@@ -3769,10 +3861,14 @@ fn check_chain_dump(harness: &TestHarness, expected_len: u64) {
 /// Check that every state from the canonical chain is in the database, and that the
 /// reverse state and block root iterators reach genesis.
 fn check_iterators(harness: &TestHarness) {
+    check_iterators_from_slot(harness, Slot::new(0))
+}
+
+fn check_iterators_from_slot(harness: &TestHarness, slot: Slot) {
     let mut max_slot = None;
     for (state_root, slot) in harness
         .chain
-        .forwards_iter_state_roots(Slot::new(0))
+        .forwards_iter_state_roots(slot)
         .expect("should get iter")
         .map(Result::unwrap)
     {
@@ -3794,7 +3890,7 @@ fn check_iterators(harness: &TestHarness) {
     assert_eq!(
         harness
             .chain
-            .forwards_iter_block_roots(Slot::new(0))
+            .forwards_iter_block_roots(slot)
             .expect("should get iter")
             .last()
             .map(Result::unwrap)
