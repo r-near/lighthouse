@@ -6783,6 +6783,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     }
 
     /// As for `chain_dump` but dumping only the portion of the chain newer than `from_slot`.
+    #[allow(clippy::type_complexity)]
     pub fn chain_dump_from_slot(
         &self,
         from_slot: Slot,

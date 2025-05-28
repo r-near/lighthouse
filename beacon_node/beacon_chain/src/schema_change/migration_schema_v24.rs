@@ -36,6 +36,32 @@ pub fn store_full_state_v22<E: EthSpec>(
     Ok(())
 }
 
+/// Fetch a V22 state from the database either as a full state or using block replay.
+pub fn get_state_v22<T: BeaconChainTypes>(
+    db: &Arc<HotColdDB<T::EthSpec, T::HotStore, T::ColdStore>>,
+    state_root: &Hash256,
+    spec: &ChainSpec,
+) -> Result<Option<BeaconState<T::EthSpec>>, Error> {
+    let Some(summary) = db.get_item::<HotStateSummaryV22>(state_root)? else {
+        return Ok(None);
+    };
+    let Some(base_state) =
+        get_full_state_v22(&db.hot_db, &summary.epoch_boundary_state_root, spec)?
+    else {
+        return Ok(None);
+    };
+    // Loading hot states via block replay doesn't care about the schema version, so we can use
+    // the DB's current method for this.
+    let update_cache = false;
+    db.load_hot_state_using_replay(
+        base_state,
+        summary.slot,
+        summary.latest_block_root,
+        update_cache,
+    )
+    .map(Some)
+}
+
 pub fn get_full_state_v22<KV: KeyValueStore<E>, E: EthSpec>(
     db: &KV,
     state_root: &Hash256,
@@ -137,6 +163,20 @@ pub struct HotStateSummaryV22 {
     slot: Slot,
     latest_block_root: Hash256,
     epoch_boundary_state_root: Hash256,
+}
+
+impl StoreItem for HotStateSummaryV22 {
+    fn db_column() -> DBColumn {
+        DBColumn::BeaconStateSummary
+    }
+
+    fn as_store_bytes(&self) -> Vec<u8> {
+        self.as_ssz_bytes()
+    }
+
+    fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(Self::from_ssz_bytes(bytes)?)
+    }
 }
 
 pub fn upgrade_to_v24<T: BeaconChainTypes>(
@@ -319,19 +359,8 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
                 match storage_strategy {
                     StorageStrategy::DiffFrom(_) | StorageStrategy::Snapshot => {
-                        // We choose to not compute states during the epoch with block replay for
-                        // simplicity. Therefore we can only support a hot heriarchy config where the
-                        // lowest layer is >= log2(SLOTS_PER_EPOCH).
-                        // FIXME(tree-states): we need to remove this restriction.
-                        if slot % T::EthSpec::slots_per_epoch() != 0 {
-                            return Err(Error::MigrationError(format!(
-                                "Hot hierarchy config lowest value must be >= {}",
-                                T::EthSpec::slots_per_epoch().trailing_zeros()
-                            )));
-                        }
-
-                        // Load the full state and re-store it as a snapshot or diff.
-                        let state = get_full_state_v22(&db.hot_db, &state_root, &db.spec)?
+                        // Load the state and re-store it as a snapshot or diff.
+                        let state = get_state_v22::<T>(&db, &state_root, &db.spec)?
                             .ok_or(Error::MissingState(state_root))?;
 
                         // Store immediately so that future diffs can load and diff from it.

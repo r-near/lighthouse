@@ -1791,7 +1791,7 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
         }
     }
 
-    fn load_hot_state_using_replay(
+    pub fn load_hot_state_using_replay(
         &self,
         base_state: BeaconState<E>,
         slot: Slot,

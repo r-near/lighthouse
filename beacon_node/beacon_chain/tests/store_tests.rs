@@ -3681,7 +3681,7 @@ async fn ancestor_state_root_prior_to_split() {
                     store
                         .load_hot_state_summary(&ancestor_state_root)
                         .unwrap()
-                        .expect(&format!(
+                        .unwrap_or_else(|| panic!(
                             "no summary found for {ancestor_state_root:?} (slot {ancestor_slot})"
                         ))
                         .slot,
