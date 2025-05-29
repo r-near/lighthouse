@@ -3647,18 +3647,18 @@ async fn ancestor_state_root_prior_to_split() {
                 if ancestor_slot == state_slot {
                     continue;
                 }
-                tracing::debug!(
-                    %state_slot,
-                    %ancestor_slot,
-                    head_slot = %head_state.slot(),
-                    "Fetching ancestor state root"
-                );
                 let ancestor_state_root = store::hot_cold_store::get_ancestor_state_root(
                     &store,
                     &head_state,
                     ancestor_slot,
                 )
-                .unwrap();
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "get_ancestor_state_root failed for state_slot={state_slot}, \
+                         ancestor_slot={ancestor_slot}, head_slot={}. error: {e:?}",
+                        head_state.slot()
+                    )
+                });
 
                 // Check state root correctness.
                 assert_eq!(
