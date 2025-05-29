@@ -484,6 +484,7 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
     let mut migrate_ops = vec![];
     let mut states_written = 0;
     let mut summaries_written = 0;
+    let mut summaries_skipped = 0;
     let mut last_log_time = Instant::now();
 
     // Rebuild the PruningCheckpoint from the split.
@@ -502,6 +503,18 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
         .into_iter()
         .flat_map(|(_, summaries)| summaries)
     {
+        // No need to migrate any states prior to the split. The v22 schema does not need them, and
+        // they would generate warnings about a disjoint DAG when re-upgrading to V24.
+        if summary.slot < split.slot {
+            debug!(
+                slot = %summary.slot,
+                ?state_root,
+                "Skipping migration of pre-split state"
+            );
+            summaries_skipped += 1;
+            continue;
+        }
+
         // If boundary state: persist.
         // Do not cache these states as they are unlikely to be relevant later.
         let update_cache = false;
@@ -538,18 +551,6 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
         ));
         summaries_written += 1;
 
-        // Delete existing data
-        for db_column in [
-            DBColumn::BeaconStateHotSummary,
-            DBColumn::BeaconStateHotDiff,
-            DBColumn::BeaconStateHotSnapshot,
-        ] {
-            migrate_ops.push(KeyValueStoreOp::DeleteKey(
-                db_column,
-                state_root.as_slice().to_vec(),
-            ));
-        }
-
         if last_log_time.elapsed() > Duration::from_secs(5) {
             last_log_time = Instant::now();
             info!(
@@ -561,9 +562,27 @@ pub fn downgrade_from_v24<T: BeaconChainTypes>(
         }
     }
 
+    // Delete all V24 schema data. We do this outside the loop over summaries to ensure we cover
+    // every piece of data and to simplify logic around skipping certain summaries that do not get
+    // migrated.
+    for db_column in [
+        DBColumn::BeaconStateHotSummary,
+        DBColumn::BeaconStateHotDiff,
+        DBColumn::BeaconStateHotSnapshot,
+    ] {
+        for key in db.hot_db.iter_column_keys::<Hash256>(db_column) {
+            let state_root = key?;
+            migrate_ops.push(KeyValueStoreOp::DeleteKey(
+                db_column,
+                state_root.as_slice().to_vec(),
+            ));
+        }
+    }
+
     info!(
         states_written,
         summaries_written,
+        summaries_skipped,
         summaries_count = state_summaries_dag.summaries_count(),
         "DB downgrade of v24 state summaries completed"
     );
