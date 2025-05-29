@@ -398,7 +398,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
                             diff_base_state,
                         };
                         let op = new_summary.as_kv_store_op(state_root);
-                        // It's not ncessary to immediately commit the summaries of states that are
+                        // It's not necessary to immediately commit the summaries of states that are
                         // ReplayFrom. However we do so for simplicity.
                         db.hot_db.do_atomically(vec![op])?;
                     }
