@@ -3,14 +3,15 @@ use crate::{
     summaries_dag::{DAGStateSummary, DAGStateSummaryV22, StateSummariesDAG},
 };
 use ssz::{Decode, DecodeError, Encode};
-use ssz_derive::{Decode, Encode};
+use ssz_derive::Encode;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 use store::{
-    hdiff::StorageStrategy, hot_cold_store::OptionalDiffBaseState, DBColumn, Error, HotColdDB,
-    HotStateSummary, KeyValueStore, KeyValueStoreOp, StoreItem,
+    hdiff::StorageStrategy,
+    hot_cold_store::{HotStateSummaryV22, OptionalDiffBaseState},
+    DBColumn, Error, HotColdDB, HotStateSummary, KeyValueStore, KeyValueStoreOp, StoreItem,
 };
 use tracing::{debug, info, warn};
 use types::{
@@ -155,27 +156,6 @@ impl StoreItem for PruningCheckpoint {
         Ok(PruningCheckpoint {
             checkpoint: Checkpoint::from_ssz_bytes(bytes)?,
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, Encode, Decode)]
-pub struct HotStateSummaryV22 {
-    slot: Slot,
-    latest_block_root: Hash256,
-    epoch_boundary_state_root: Hash256,
-}
-
-impl StoreItem for HotStateSummaryV22 {
-    fn db_column() -> DBColumn {
-        DBColumn::BeaconStateSummary
-    }
-
-    fn as_store_bytes(&self) -> Vec<u8> {
-        self.as_ssz_bytes()
-    }
-
-    fn from_store_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        Ok(Self::from_ssz_bytes(bytes)?)
     }
 }
 
