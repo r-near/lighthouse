@@ -3185,7 +3185,6 @@ async fn schema_downgrade_to_min_version_full_node_per_epoch_diffs() {
 }
 
 // Schema upgrade/downgrade on a full node with dense per-slot diffs.
-// FIXME(tree-states): this will panic
 #[tokio::test]
 async fn schema_downgrade_to_min_version_full_node_dense_diffs() {
     schema_downgrade_to_min_version(

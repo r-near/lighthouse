@@ -345,7 +345,7 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
 
                         // Store immediately so that future diffs can load and diff from it.
                         let mut ops = vec![];
-                        // We must commit the hot state summary immediatelly, otherwise we can't diff
+                        // We must commit the hot state summary immediately, otherwise we can't diff
                         // against it and future writes will fail. That's why we write the new hot
                         // summaries in a different column to have both new and old data present at
                         // once. Otherwise if the process crashes during the migration the database will

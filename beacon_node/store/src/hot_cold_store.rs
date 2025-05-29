@@ -1662,7 +1662,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
 
         match self.hot_storage_strategy(slot)? {
             StorageStrategy::Snapshot => {
-                // FIXME(tree-states): rename error
                 let Some(state) = self.load_hot_state_as_snapshot(state_root)? else {
                     let existing_snapshots = self.load_hot_state_snapshot_roots()?;
                     // TODO(hdiff): this log is for debug and can include a very long list of roots,
@@ -3483,9 +3482,6 @@ pub fn get_ancestor_state_root<'a, E: EthSpec, Hot: ItemStore<E>, Cold: ItemStor
     // traversing the sparse portion of the hdiff grid (prior to the split slot). It is also
     // necessary for the v24 schema migration on archive nodes, where there isn't yet any grid
     // to traverse.
-    //
-    // FIXME(tree-states): still need to add logic below to somehow traverse the grid on non-archive
-    // nodes.
     if target_slot < split.slot && target_slot >= state_upper_limit {
         drop(split);
         return store
