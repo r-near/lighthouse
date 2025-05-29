@@ -3679,6 +3679,68 @@ async fn ancestor_state_root_prior_to_split() {
     assert_ne!(store.get_split_slot(), 0);
 }
 
+// Test that the chain operates correctly when the split state is stored as a ReplayFrom.
+#[tokio::test]
+async fn replay_from_split_state() {
+    let db_path = tempdir().unwrap();
+
+    let spec = test_spec::<E>();
+
+    let store_config = StoreConfig {
+        prune_payloads: false,
+        hierarchy_config: HierarchyConfig::from_str("5").unwrap(),
+        ..StoreConfig::default()
+    };
+    let chain_config = ChainConfig {
+        reconstruct_historic_states: false,
+        ..ChainConfig::default()
+    };
+    let import_all_data_columns = false;
+
+    let store = get_store_generic(&db_path, store_config.clone(), spec.clone());
+    let harness = get_harness_generic(
+        store.clone(),
+        LOW_VALIDATOR_COUNT,
+        chain_config,
+        import_all_data_columns,
+    );
+
+    // Produce blocks until we finalize epoch 3 which will not be stored as a snapshot.
+    let num_blocks = 5 * E::slots_per_epoch() as usize;
+
+    harness
+        .extend_chain(
+            num_blocks,
+            BlockStrategy::OnCanonicalHead,
+            AttestationStrategy::AllValidators,
+        )
+        .await;
+
+    let split = store.get_split_info();
+    let anchor_slot = store.get_anchor_info().anchor_slot;
+    assert_eq!(split.slot, 3 * E::slots_per_epoch());
+    assert_eq!(anchor_slot, 0);
+    assert!(store
+        .hierarchy
+        .storage_strategy(split.slot, anchor_slot)
+        .unwrap()
+        .is_replay_from());
+
+    // Close the database and reopen it.
+    drop(store);
+    drop(harness);
+
+    let store = get_store_generic(&db_path, store_config, spec);
+
+    // Check that the split state is still accessible.
+    assert_eq!(store.get_split_slot(), split.slot);
+    let state = store
+        .get_hot_state(&split.state_root, false)
+        .unwrap()
+        .expect("split state should be present");
+    assert_eq!(state.slot(), split.slot);
+}
+
 /// Checks that two chains are the same, for the purpose of these tests.
 ///
 /// Several fields that are hard/impossible to check are ignored (e.g., the store).

@@ -2769,7 +2769,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 // Load the hot state summary to get the block root.
                 let latest_block_root = self
                     .load_block_root_from_summary_any_version(&split.state_root)
-                    .map_err(|e| Error::LoadHotStateSummaryForSplit(e.into()))?
                     .ok_or(HotColdDBError::MissingSplitState(
                         split.state_root,
                         split.slot,
@@ -2820,13 +2819,14 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     pub fn load_block_root_from_summary_any_version(
         &self,
         state_root: &Hash256,
-    ) -> Result<Option<Hash256>, Error> {
-        self.load_hot_state_summary(state_root)
-            .map(|opt_summary| opt_summary.map(|summary| summary.latest_block_root))
-            .or_else(|_| {
-                self.load_hot_state_summary_v22(state_root)
-                    .map(|opt_summary| opt_summary.map(|summary| summary.latest_block_root))
-            })
+    ) -> Option<Hash256> {
+        if let Ok(Some(summary)) = self.load_hot_state_summary(state_root) {
+            return Some(summary.latest_block_root);
+        }
+        if let Ok(Some(summary)) = self.load_hot_state_summary_v22(state_root) {
+            return Some(summary.latest_block_root);
+        }
+        None
     }
 
     /// Load all hot state summaries present in the hot DB
