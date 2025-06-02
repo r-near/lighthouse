@@ -432,8 +432,6 @@ pub fn upgrade_to_v24<T: BeaconChainTypes>(
         }
     }
 
-    // TODO(hdiff): Should run hot DB compaction after deleting potentially a lot of states. Or should wait
-    // for the next finality event?
     info!(
         diffs_written,
         summaries_written,

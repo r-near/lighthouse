@@ -1636,27 +1636,12 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
     }
 
     fn load_hot_hdiff_buffer(&self, state_root: Hash256) -> Result<HDiffBuffer, Error> {
-        // FIXME(tree-states): Add cache of hot hdiff buffers
         let Some(HotStateSummary {
             slot,
             diff_base_state,
             ..
         }) = self.load_hot_state_summary(&state_root)?
         else {
-            let mut existing_summaries = self
-                .load_hot_state_summaries()?
-                .into_iter()
-                .map(|(state_root, summary)| (state_root, summary.slot))
-                .collect::<Vec<(Hash256, Slot)>>();
-            existing_summaries.sort_by_key(|(_, slot)| *slot);
-            // Hot summaries should never be missing, dump the current list of summaries to ease debug
-            // TODO(hdiff): this log is for debug and can include a very long list of roots,
-            // thousands in non-finality.
-            debug!(
-                requested = ?state_root,
-                existing_summaries = ?existing_summaries,
-                "MissingHotStateSummary"
-            );
             return Err(Error::MissingHotStateSummary(state_root));
         };
 
@@ -1664,12 +1649,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             StorageStrategy::Snapshot => {
                 let Some(state) = self.load_hot_state_as_snapshot(state_root)? else {
                     let existing_snapshots = self.load_hot_state_snapshot_roots()?;
-                    // TODO(hdiff): this log is for debug and can include a very long list of roots,
-                    // thousands in non-finality.
                     debug!(
                         requested = ?state_root,
                         existing_snapshots = ?existing_snapshots,
-                        "MissingHotStateSnapshot"
+                        "Missing hot state snapshot"
                     );
                     return Err(Error::MissingHotStateSnapshot(state_root, slot));
                 };
@@ -1835,8 +1818,6 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
             Ok(())
         };
 
-        // FIXME(tree-states): reconsider caching
-        // FIXME(tree-states): we could pass a summary-based state root iterator here
         self.replay_blocks(
             base_state,
             blocks,
